@@ -35,63 +35,37 @@ class SealionReActAgent:
 				
 				# Detect if query is in Indonesian
 				is_indonesian = any(word in query.lower() for word in ['saya', 'aku', 'nama', 'sedang', 'tolong', 'bantu'])
-				
-				if is_indonesian:
-						system_prompt = f"""Anda adalah asisten kesehatan perjalanan yang membantu wisatawan Indonesia. 
-                                Tugas mu adalah fokus mencari obat alternatif, mudah ditemukan atau minuman herbal yang
-                                dapat menyembuhkan penyakit daripada pengguna (sebagai penangganan pertama).
-                                Anda memiliki akses ke alat-alat berikut:
-                                
-                                {tool_descriptions}
-                                
-                                PENTING: Anda HARUS menggunakan alat-alat ini untuk mendapatkan informasi terkini sebelum menjawab. Jangan hanya mengandalkan pengetahuan internal.
-                                
-                                Format yang HARUS digunakan:
-                                Thought: [pemikiran Anda tentang apa yang harus dilakukan]
-                                Action: [nama alat yang akan digunakan, harus salah satu dari: google_search_and_crawl]
-                                Action Input: [input untuk alat tersebut]
-                                Observation: [hasil dari alat akan muncul di sini]
-                                ... (ulangi Thought/Action/Action Input/Observation sesuai kebutuhan)
-                                Thought: [pemikiran final]
-                                Final Answer: [jawaban lengkap Anda untuk pengguna]
-                                
-                                Rekomendasi penggunaan alat:
-                                - Gunakan 'google_search_and_crawl' untuk mendapatkan informasi komprehensif dari beberapa sumber sekaligus
+			
+				system_prompt = f"""You are a travel health assistant helping travelers. 
+								Your task  focus searching on remedies or herbal medicine atau traditional herbal 
+								supplement that can ease the user's illness (first treatment focused).
+								You have access to these tools:
+								
+								{tool_descriptions}
+								
+								IMPORTANT: You MUST use these tools to get current information before answering. 
+								Don't rely only on internal knowledge.
+								
+								Use this exact format:
+								Thought: [your reasoning about what to do]
+								Action: [tool name to use, must be one of: google_search_and_crawl]
+								Action Input: [input for the tool]
+								Observation: [tool result will appear here]
+								... (repeat Thought/Action/Action Input/Observation as needed)
+								Thought: [final reasoning]
+								Final Answer: [your complete answer to the user]
+								
+								Tool usage recommendations:
+								- Use 'google_search_and_crawl' to get comprehensive information from multiple sources at once
+								
+								Guidance task to do:
+								1. Search regarding the illness and the remedies taken in user's origin country.
+								2. Search the remedies or herbal medicine atau traditional herbal supplement in destination country or local context.
+								3. You must provide remedies or herbal medicine atau traditional herbal supplement that can be found locally especially
+								in user's destination country.
 
-								Yang perlu dilakukan:
-								1. Mengerti tentang penyakit dari pengguna.
-								2. Mencari obat alternatif, mudah ditemukan atau minuman herbal di google search.
-
-                                Pertanyaan: {query}
-                                Thought: Saya perlu mencari informasi terkini tentang"""
-				else:
-					system_prompt = f"""You are a travel health assistant helping travelers. 
-									Your task  focus searching on remedies or alternative medicine that are available, easily find or herbal that can
-									ease the user's illness (somekind of initial handling).
-									You have access to these tools:
-									
-									{tool_descriptions}
-									
-									IMPORTANT: You MUST use these tools to get current information before answering. Don't rely only on internal knowledge.
-									
-									Use this exact format:
-									Thought: [your reasoning about what to do]
-									Action: [tool name to use, must be one of: google_search_and_crawl]
-									Action Input: [input for the tool]
-									Observation: [tool result will appear here]
-									... (repeat Thought/Action/Action Input/Observation as needed)
-									Thought: [final reasoning]
-									Final Answer: [your complete answer to the user]
-									
-									Tool usage recommendations:
-									- Use 'google_search_and_crawl' to get comprehensive information from multiple sources at once
-									
-									Required tasks to do:
-									1. Understand the illness
-									2. Search for the remedies or remedies or alternative medicine that are available, easily find or herbal in google search.
-
-									Question: {query}
-									Thought: I need to search for current information about"""
+								Question: {query}
+								Thought: I need to search for current information about"""
 				
 				return system_prompt
 		
@@ -111,7 +85,8 @@ class SealionReActAgent:
 								# Get LLM response
 								result = self.llm._generate(messages)
 								response_text = result.generations[0].message.content.strip()
-								
+								print("Raw Result from LLM Generation: ",response_text)
+
 								if self.verbose:
 									print(f"\n--- Iteration {iteration + 1} ---")
 									print(f"LLM Response: {response_text[:300]}...")
@@ -120,7 +95,6 @@ class SealionReActAgent:
 								if "Final Answer:" in response_text:
 									final_answer = response_text.split("Final Answer:")[-1].strip()
 									print("Pass through final answer: ")
-									print("\n\nMessages: ",messages)
 									print("-"*100)
 									return {
 											"output": final_answer,
@@ -168,10 +142,17 @@ class SealionReActAgent:
 										if self.verbose:
 												print(f"Executing: {action_name} with input: {action_input[:100]}...")
 										
+										cc = None
 										# Execute the tool
 										if action_name in self.tool_map:
+												if "country_code=" in action_input: 
+													action_input,cc = action_input.split("country_code=")[0],action_input.split("country_code=")[1]
+												
 												try:
-														tool_result = self.tool_map[action_name].func(action_input)
+														if cc:
+															tool_result = self.tool_map[action_name].func(action_input,country_code=cc)
+														else:
+															tool_result = self.tool_map[action_name].func(action_input)
 														intermediate_steps.append((action_name, action_input, tool_result))
 														
 														# Add to conversation

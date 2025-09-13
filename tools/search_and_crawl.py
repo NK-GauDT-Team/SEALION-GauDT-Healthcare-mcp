@@ -429,7 +429,9 @@ class SageMakerToolsVariable:
 
     GOOGLE_SEARCH_WITH_CRAWLING = Tool(
         name="google_search_and_crawl",
-        description="Search Google and automatically crawl the top 5 results for detailed content. Use this when you need comprehensive, detailed information from multiple sources about health, travel, or medical topics.",
+        description="""Search Google and automatically crawl the top 5 results for detailed content.
+                        Use this when you need comprehensive, detailed information from multiple sources about health, travel, or medical topics.
+                        You may use country_code = ID|VN|US|etc given by the query to send to search for specific countries.""",
         func=gs_search_with_crawling
     )
     

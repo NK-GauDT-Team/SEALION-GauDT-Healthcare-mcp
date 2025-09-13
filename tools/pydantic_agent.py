@@ -221,7 +221,7 @@ class ExtractUserIllness:
         # Get the raw translation string
         translation = query_translate.choices[0].message.content.strip()
         return translation
-    def retrieve_response(self,query,extraction_purpose = "health"):
+    def retrieve_response(self,query,destination_country = None,origin_country = None,extraction_purpose = "health"):
         # 1. Define Pydantic Format
         if extraction_purpose == "medicine":
             PydanticFormat = MedicineQuery
@@ -243,8 +243,9 @@ class ExtractUserIllness:
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a medical information extractor. Always return output as valid JSON that follows the schema: "
-                              f"{PydanticFormat.schema()}"
+                    "content": f"""You are a medical information extractor recommending to buy remedies or traiditional herbal medicine in {destination_country}. 
+                                    Always return output as valid JSON that follows the schema (remember to input the {destination_country} terms and translate everything to {origin_country}): """
+                                    f"{PydanticFormat.schema()}"
                 },
                 {
                     "role": "user",

@@ -86,5 +86,7 @@ if response.get("intermediate_steps"):
             print(f"  Input: {step[1]}")
             print(f"  Result: {step[2][:200]}..." if len(step[2]) > 200 else f"  Result: {step[2]}")
 
-final_response = ExtractUserIllness(api_key,model_name).retrieve_response(response,extraction_purpose="medicine")
+final_response = ExtractUserIllness(api_key,model_name).retrieve_response(response,extraction_purpose="medicine",
+                                                                                destination_country=illness_extraction['destination_location'],
+                                                                                origin_country=illness_extraction['origin_location'])
 print(final_response)
