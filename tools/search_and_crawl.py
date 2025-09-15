@@ -14,7 +14,7 @@ import logging
 import re
 import requests
 import os
-import time
+import httpx,asyncio,time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
@@ -25,6 +25,13 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+FIRECRAWL_BASE = os.getenv("CRAWLER_BASE_URL", "http://ec2-13-251-44-139.ap-southeast-1.compute.amazonaws.com:3002")
+SCRAPE_ENDPOINT = f"{FIRECRAWL_BASE}/v1/scrape"
+HEADERS = {"Content-Type": "application/json"}
+
+# Keep this equal to your Playwright workers to avoid queueing contention
+MAX_CONCURRENCY = int(os.getenv("SCRAPER_CONCURRENCY", "3"))
 
 class SageMakerSealionChat(BaseChatModel):
 		"""ChatModel implementation for SageMaker Sealion endpoint"""
@@ -189,6 +196,83 @@ def load_sealion_chat(endpoint_name:str,query:str,
     
     return client,prompt
 
+async def scrape_one(
+    client: httpx.AsyncClient,
+    url: str,
+    semaphore: asyncio.Semaphore,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    timeout_s: float = 90.0,
+) -> Dict[str, Any]:
+    """POST a single URL to Firecrawl with retries."""
+    attempt = 0
+    payload = make_payload(url)
+
+    async with semaphore:
+        while True:
+            attempt += 1
+            try:
+                resp = await client.post(
+                    SCRAPE_ENDPOINT,
+                    headers=HEADERS,
+                    json=payload,
+                    timeout=timeout_s,
+                )
+                # Raise for HTTP errors
+                resp.raise_for_status()
+
+                # Firecrawl usually returns JSON. Guard against non-JSON responses.
+                try:
+                    data = resp.json()
+                except json.JSONDecodeError:
+                    data = {"raw": resp.text}
+
+                return {
+                    "url": url,
+                    "status": resp.status_code,
+                    "data": data,
+                }
+
+            except (httpx.HTTPError, httpx.ConnectError, httpx.ReadTimeout) as e:
+                if attempt >= max_retries:
+                    return {
+                        "url": url,
+                        "status": "error",
+                        "error": f"{type(e).__name__}: {e}",
+                        "attempts": attempt,
+                    }
+                # Backoff
+                delay = base_delay * (2 ** (attempt - 1))
+                await asyncio.sleep(delay)
+
+async def scrape_all(urls: List[str]) -> List[Dict[str, Any]]:
+    semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
+    async with httpx.AsyncClient(http2=True) as client:
+        tasks = [scrape_one(client, u, semaphore) for u in urls]
+        return await asyncio.gather(*tasks)
+
+def run_async_scraping(urls: List[str]) -> List[Dict[str, Any]]:
+    """Wrapper to run async scraping in sync context"""
+    try:
+        # Try to get existing event loop
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If loop is already running, create a new thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, scrape_all(urls))
+                return future.result(timeout=120)  # 2 minute timeout
+        else:
+            return loop.run_until_complete(scrape_all(urls))
+    except RuntimeError:
+        # No event loop exists, create new one
+        return asyncio.run(scrape_all(urls))
+
+def make_payload(url: str) -> Dict[str, Any]:
+    """Create payload for Firecrawl API"""
+    return {
+        "url": url
+    }
 
 def gs_search_with_crawling(query: str, limit: int = 6, 
                             crawl_top: int = 5,
@@ -228,10 +312,9 @@ def gs_search_with_crawling(query: str, limit: int = 6,
                     })
             else:
                 break
-        
+
         if not results:
             return f"No search results found for '{query}'"
-        print("Total links: ",len(results))
 
         # Format search results
         formatted_results = f"Search results for '{query}':\n\n"
@@ -246,21 +329,59 @@ def gs_search_with_crawling(query: str, limit: int = 6,
         # Crawl the top URLs
         formatted_results += f"\n--- DETAILED CONTENT FROM TOP {len(urls_to_crawl)} RESULTS ---\n\n"
         
-        crawl_results = crawl_multiple_urls(urls_to_crawl, max_workers=3)
+        # Extract URLs for scraping (top N results)
+        urls_to_scrape = [result['link'] for result in results[:crawl_top]]
+        print("List to scrape: ",urls_to_scrape)
+        # Scrape the top URLs using async Firecrawl
+        formatted_results += f"\n--- DETAILED CONTENT FROM TOP {len(urls_to_scrape)} RESULTS (via Firecrawl) ---\n\n"
         extract_crawl = []
-        for i, (url, content) in enumerate(crawl_results.items(), 1):
-            # Extract only max_limit
-            if len(extract_crawl) > max_limit:
-                break
-            # formatted_results += f"=== CONTENT {i}: {url} ===\n"
-            # Extract key information from crawled content
-            key_info = client._generate(messages + [f"\n\n{content}"])
-            if key_info.generations[0].message:
-                extract_crawl.append(key_info.generations[0].message.content)
+        try:
+            scrape_results = run_async_scraping(urls_to_scrape)
+            
+            for i, result in enumerate(scrape_results, 1):
+                formatted_results += f"=== CONTENT {i}: {result.get('url', 'Unknown URL')} ===\n"
+                # Extract content from Firecrawl response
+                data = result.get('data', {})
+                if isinstance(data, dict):
+                    content = data.get('content', data.get('markdown', data.get('text', str(data))))
+                else:
+                    content = str(data)
+                print("The result is out: ",content)
+                key_info = client._generate(messages + [f"\n\n{content}"])
+                if key_info.generations[0].message:
+                    extract_crawl.append(key_info.generations[0].message.content)
+                
+                # Extract key information
+                # if content and len(content) > 50:
+                #     key_info = extract_crawl_first_item_tool(content)
+                #     formatted_results += f"{key_info}\n\n"
+                # else:
+                #     formatted_results += "No meaningful content extracted.\n\n"
+            
+        except Exception as scrape_error:
+            formatted_results += f"Error during scraping: {str(scrape_error)}\n"
+            logger.error(f"Scraping error: {scrape_error}")
         
-        return "\n\n".join(extract_crawl)
+        return extract_crawl
+        
     except Exception as e:
+        logger.error(f"Search and crawl failed: {e}")
         return f"Search and crawl failed: {str(e)}"
+        
+    #     extract_crawl = []
+    #     for i, (url, content) in enumerate(crawl_results.items(), 1):
+    #         # Extract only max_limit
+    #         if len(extract_crawl) > max_limit:
+    #             break
+    #         # formatted_results += f"=== CONTENT {i}: {url} ===\n"
+    #         # Extract key information from crawled content
+    #         key_info = client._generate(messages + [f"\n\n{content}"])
+    #         if key_info.generations[0].message:
+    #             extract_crawl.append(key_info.generations[0].message.content)
+        
+    #     return "\n\n".join(extract_crawl)
+    # except Exception as e:
+    #     return f"Search and crawl failed: {str(e)}"
 
 
 def crawl_multiple_urls(urls: List[str], max_workers: int = 3) -> Dict[str, str]:
