@@ -1,0 +1,277 @@
+INFO:     Started server process [35764]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:5000 (Press CTRL+C to quit)
+INFO:     Started server process [35834]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 5000): address already in use
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     182.3.50.203:64035 - "POST /test_process/ HTTP/1.1" 200 OK
+INFO:     182.3.36.108:54945 - "OPTIONS /test_process/ HTTP/1.1" 200 OK
+INFO:     182.3.36.108:54945 - "POST /test_process/ HTTP/1.1" 200 OK
+INFO:     182.3.36.96:55589 - "POST /test_process/ HTTP/1.1" 200 OK
+INFO:     182.3.36.96:60840 - "POST /test_process/ HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:botocore.credentials:Found credentials in shared credentials file: ~/.aws/credentials
+INFO:tools.sealion_mcp:Successfully initialized Sealion MCP Agent with enhanced tool parsing
+INFO:tools.sealion_mcp:Starting iteration 1
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+INFO:tools.sealion_mcp:Starting iteration 2
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+INFO:tools.sealion_mcp:Starting iteration 3
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+============================================================
+Initializing Enhanced Sealion MCP Agent...
+============================================================
+in
+✅ Parsed result: {'illness': 'masuk angin', 'illness_explanation': 'Saya sedang masuk angin.', 'destination_location': 'Vietnam', 'origin_location': 'Jakarta', 'query_translate_based_on_destination': 'bệnh cảm lạnh do thay đổi thời tiết, cách chữa bệnh cảm lạnh do thay đổi thời tiết, trị bệnh cảm lạnh do thay đổi thời tiết, thuốc chữa cảm lạnh do thay đổi thời tiết, tôi đang bị cảm lạnh do thay đổi thời tiết.', 'destination_code': 'VN', 'origin_code': 'ID'}
+✓ Agent initialized successfully
+
+Query (Indonesian):
+  bệnh cảm lạnh do thay đổi thời tiết, cách chữa bệnh cảm lạnh do thay đổi thời tiết, trị bệnh cảm lạnh do thay đổi thời tiết, thuốc chữa cảm lạnh do thay đổi thời tiết, tôi đang bị cảm lạnh do thay đổi thời tiết.
+
+Processing...
+
+------------------------------------------------------------
+
+--- Iteration 1 ---
+LLM Response: I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid....
+No action found, asking for final answer
+
+--- Iteration 2 ---
+LLM Response: I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid....
+No action found, asking for final answer
+
+--- Iteration 3 ---
+LLM Response: I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid....
+No action found, asking for final answer
+Pass through fallback response
+
+============================================================
+FINAL ANSWER:
+============================================================
+I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+❌ Validation failed: 1 validation error for MedicineQuery
+medicine_details
+  List should have at least 1 item after validation, not 0 [type=too_short, input_value=[], input_type=list]
+    For further information visit https://errors.pydantic.dev/2.11/v/too_short
+Raw output: ```json
+{
+  "medicine_details": [],
+  "non_pharmacologic_methods": [],
+  "analysis": "The provided text indicates an error message and does not contain any medical information or query related to health, remedies, or traditional medicine. Therefore, no recommendations can be made.",
+  "severity": "low"
+}
+```
+INFO:     182.3.37.231:52766 - "POST /process/ HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:tools.sealion_mcp:Successfully initialized Sealion MCP Agent with enhanced tool parsing
+INFO:tools.sealion_mcp:Starting iteration 1
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+INFO:tools.sealion_mcp:Starting iteration 2
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+INFO:tools.sealion_mcp:Starting iteration 3
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+============================================================
+Initializing Enhanced Sealion MCP Agent...
+============================================================
+in
+✅ Parsed result: {'illness': 'masuk angin', 'illness_explanation': 'Saya sedang masuk angin.', 'destination_location': 'Vietnam', 'origin_location': 'Jakarta', 'query_translate_based_on_destination': 'bệnh cảm lạnh do thay đổi thời tiết, cách chữa bệnh cảm lạnh do thay đổi thời tiết, trị bệnh cảm lạnh do thay đổi thời tiết, thuốc chữa cảm lạnh do thay đổi thời tiết, tôi đang bị cảm lạnh do thay đổi thời tiết.', 'destination_code': 'VN', 'origin_code': 'ID'}
+✓ Agent initialized successfully
+
+Query (Indonesian):
+  bệnh cảm lạnh do thay đổi thời tiết, cách chữa bệnh cảm lạnh do thay đổi thời tiết, trị bệnh cảm lạnh do thay đổi thời tiết, thuốc chữa cảm lạnh do thay đổi thời tiết, tôi đang bị cảm lạnh do thay đổi thời tiết.
+
+Processing...
+
+------------------------------------------------------------
+
+--- Iteration 1 ---
+LLM Response: I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid....
+No action found, asking for final answer
+
+--- Iteration 2 ---
+LLM Response: I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid....
+No action found, asking for final answer
+
+--- Iteration 3 ---
+LLM Response: I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid....
+No action found, asking for final answer
+Pass through fallback response
+
+============================================================
+FINAL ANSWER:
+============================================================
+I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+❌ Validation failed: 1 validation error for MedicineQuery
+medicine_details
+  List should have at least 1 item after validation, not 0 [type=too_short, input_value=[], input_type=list]
+    For further information visit https://errors.pydantic.dev/2.11/v/too_short
+Raw output: ```json
+{
+  "medicine_details": [],
+  "non_pharmacologic_methods": [],
+  "analysis": "The provided text indicates an error message and does not contain any medical information or query related to health, remedies, or traditional medicine. Therefore, no recommendations can be made.",
+  "severity": "low"
+}
+```
+INFO:     182.3.37.231:64114 - "POST /process/ HTTP/1.1" 200 OK
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:tools.sealion_mcp:Successfully initialized Sealion MCP Agent with enhanced tool parsing
+INFO:tools.sealion_mcp:Starting iteration 1
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+INFO:tools.sealion_mcp:Starting iteration 2
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+INFO:tools.sealion_mcp:Starting iteration 3
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+ERROR:tools.search_and_crawl:Error calling SageMaker endpoint: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+============================================================
+Initializing Enhanced Sealion MCP Agent...
+============================================================
+in
+✅ Parsed result: {'illness': 'masuk angin', 'illness_explanation': 'Saya sedang masuk angin.', 'destination_location': 'Vietnam', 'origin_location': 'Jakarta', 'query_translate_based_on_destination': 'bệnh cảm lạnh do thay đổi thời tiết, cách chữa bệnh cảm lạnh do thay đổi thời tiết, trị bệnh cảm lạnh do thay đổi thời tiết, thuốc chữa cảm lạnh do thay đổi thời tiết, tôi đang bị cảm lạnh do thay đổi thời tiết.', 'destination_code': 'VN', 'origin_code': 'ID'}
+✓ Agent initialized successfully
+
+Query (Indonesian):
+  bệnh cảm lạnh do thay đổi thời tiết, cách chữa bệnh cảm lạnh do thay đổi thời tiết, trị bệnh cảm lạnh do thay đổi thời tiết, thuốc chữa cảm lạnh do thay đổi thời tiết, tôi đang bị cảm lạnh do thay đổi thời tiết.
+
+Processing...
+
+------------------------------------------------------------
+
+--- Iteration 1 ---
+LLM Response: I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid....
+No action found, asking for final answer
+
+--- Iteration 2 ---
+LLM Response: I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid....
+No action found, asking for final answer
+
+--- Iteration 3 ---
+LLM Response: I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid....
+No action found, asking for final answer
+Pass through fallback response
+
+============================================================
+FINAL ANSWER:
+============================================================
+I apologize, but I encountered an error: An error occurred (UnrecognizedClientException) when calling the InvokeEndpoint operation: The security token included in the request is invalid.
+❌ Validation failed: 1 validation error for MedicineQuery
+medicine_details
+  List should have at least 1 item after validation, not 0 [type=too_short, input_value=[], input_type=list]
+    For further information visit https://errors.pydantic.dev/2.11/v/too_short
+Raw output: ```json
+{
+  "medicine_details": [],
+  "non_pharmacologic_methods": [],
+  "analysis": "The provided text indicates an error message and does not contain any medical information or query related to health, remedies, or traditional medicine. Therefore, no recommendations can be made.",
+  "severity": "low"
+}
+```
+INFO:     182.3.37.231:64130 - "POST /process/ HTTP/1.1" 200 OK
+INFO:     Started server process [40715]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:5000 (Press CTRL+C to quit)
+INFO:httpx:HTTP Request: POST https://api.sea-lion.ai/v1/chat/completions "HTTP/1.1 200 OK"
+INFO:botocore.credentials:Found credentials in shared credentials file: ~/.aws/credentials
+INFO:tools.sealion_mcp:Successfully initialized Sealion MCP Agent with enhanced tool parsing
+============================================================
+Initializing Enhanced Sealion MCP Agent...
+============================================================
+❌ Validation failed: 1 validation error for HealthQuery
+__root__
+  Expecting value: line 6 column 43 (char 194) [type=value_error.jsondecode, input_value='{\n  "illness": "masuk a... "origin_code": "ID"\n}', input_type=str]
+Raw output: ```json
+{
+  "illness": "masuk angin",
+  "illness_explanation": "Saya sedang masuk angin.",
+  "destination_location": "Vietnam",
+  "origin_location": "Jakarta",
+  "query_translate_based_on_destination": None,
+  "destination_code": "VN",
+  "origin_code": "ID"
+}
+```
+✓ Agent initialized successfully
+
+Query (Indonesian):
+INFO:     182.3.37.231:50271 - "POST /process/ HTTP/1.1" 500 Internal Server Error
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 409, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/fastapi/applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/applications.py", line 113, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/middleware/cors.py", line 85, in __call__
+    await self.app(scope, receive, send)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/routing.py", line 716, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/routing.py", line 736, in app
+    await route.handle(scope, receive, send)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/routing.py", line 290, in handle
+    await self.app(scope, receive, send)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/routing.py", line 78, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/routing.py", line 75, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/fastapi/routing.py", line 302, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/fastapi/routing.py", line 215, in run_endpoint_function
+    return await run_in_threadpool(dependant.call, **values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/starlette/concurrency.py", line 38, in run_in_threadpool
+    return await anyio.to_thread.run_sync(func)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/anyio/to_thread.py", line 56, in run_sync
+    return await get_async_backend().run_sync_in_worker_thread(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 2476, in run_sync_in_worker_thread
+    return await future
+           ^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealion_env/lib/python3.12/site-packages/anyio/_backends/_asyncio.py", line 967, in run
+    result = context.run(func, *args)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/fastapiapp.py", line 26, in process
+    result = main_app(body.query)
+             ^^^^^^^^^^^^^^^^^^^^
+  File "/home/ubuntu/SEALION-GauDT-Healthcare-mcp/sealionapp.py", line 50, in main_app
+    print(f"  {illness_extraction['query_translate_based_on_destination']}\n")
+               ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'NoneType' object is not subscriptable
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [40715]

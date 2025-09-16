@@ -17,10 +17,20 @@ import os
 import httpx,asyncio,time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
+import functools
+import asyncio
+from typing import Callable, Awaitable, Any
 
+Emit = Callable[[str, Any, str | None], Awaitable[None]]
 # Load environment variables from .env file
 load_dotenv()
 
+async def emit_progress_message(step,messages,emit:Emit,data={}):
+	return await emit("progress", {
+					"step": step,
+					"message": messages,
+					"data":data
+			}, id_=str(step))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,123 +44,135 @@ HEADERS = {"Content-Type": "application/json"}
 MAX_CONCURRENCY = int(os.getenv("SCRAPER_CONCURRENCY", "3"))
 
 class SageMakerSealionChat(BaseChatModel):
-		"""ChatModel implementation for SageMaker Sealion endpoint"""
-		
-		endpoint_name: str
-		region_name: str = "us-east-1"
-		max_tokens: int = 1024 * 4
-		temperature: float = 0.7
-		top_p: float = 0.9
-		client: Any = None
-		
-		class Config:
-			arbitrary_types_allowed = True
-		
-		def __init__(self, **kwargs):
-			super().__init__(**kwargs)
-			self.client = boto3.client(
-					'sagemaker-runtime',
-					region_name=self.region_name,
-					aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-					aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-					aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
-			)
-		
-		@property
-		def _llm_type(self) -> str:
-				return "sagemaker-sealion-chat"
-		
-		def _generate(
-				self,
-				messages: List[BaseMessage],
-				stop: Optional[List[str]] = None,
-				run_manager: Optional[CallbackManagerForLLMRun] = None,
-				**kwargs: Any,
-		) -> ChatResult:
-				"""Generate chat result from messages"""
-				
-				# Format messages for Sealion
-				formatted_prompt = self._format_messages(messages)
-				
-				try:
-						# Prepare the payload
-						payload = {
-								"inputs": formatted_prompt,
-								"parameters": {
-										"max_new_tokens": self.max_tokens,
-										"temperature": self.temperature,
-										"top_p": self.top_p,
-										"do_sample": True,
-										"return_full_text": False,
-										"stop": stop or ["Human:", "\n\nHuman:", "Question:", "Observation:"]
-								}
-						}
-						
-						logger.debug(f"Sending to SageMaker: {formatted_prompt[:200]}...")
-						
-						# Invoke the endpoint
-						response = self.client.invoke_endpoint(
-								EndpointName=self.endpoint_name,
-								ContentType='application/json',
-								Body=json.dumps(payload)
-						)
-						
-						# Parse response
-						result = json.loads(response['Body'].read().decode())
-						
-						# Extract generated text
-						if isinstance(result, list):
-								generated_text = result[0].get('generated_text', '')
-						elif isinstance(result, dict):
-								generated_text = result.get('generated_text', result.get('output', ''))
-						else:
-								generated_text = str(result)
-						
-						logger.debug(f"Received from SageMaker: {generated_text[:200]}...")
-						
-						# Create AIMessage with proper ChatGeneration
-						message = AIMessage(content=generated_text)
-						generation = ChatGeneration(message=message)
-						
-						return ChatResult(generations=[generation])
-						
-				except Exception as e:
-						logger.error(f"Error calling SageMaker endpoint: {str(e)}")
-						error_message = AIMessage(content=f"I apologize, but I encountered an error: {str(e)}")
-						generation = ChatGeneration(message=error_message)
-						return ChatResult(generations=[generation])
-		
-		def _format_messages(self, messages: List[BaseMessage]) -> str:
-				"""Format messages for Sealion model with better structure"""
-				formatted_prompt = ""
-				
-				for message in messages:
-						if isinstance(message, SystemMessage):
-								formatted_prompt += f"<|system|>\n{message.content}\n\n"
-						elif isinstance(message, HumanMessage):
-								formatted_prompt += f"<|user|>\n{message.content}\n\n"
-						elif isinstance(message, AIMessage):
-								formatted_prompt += f"<|assistant|>\n{message.content}\n\n"
-						elif hasattr(message, 'content'):
-								# Handle other message types
-								formatted_prompt += f"{message.content}\n\n"
-				
-				# Ensure we end properly for the model to continue
-				if not formatted_prompt.endswith("<|assistant|>\n"):
-						formatted_prompt += "<|assistant|>\n"
-				
-				return formatted_prompt
-		
-		async def _agenerate(
-				self,
-				messages: List[BaseMessage],
-				stop: Optional[List[str]] = None,
-				run_manager: Optional[CallbackManagerForLLMRun] = None,
-				**kwargs: Any,
-		) -> ChatResult:
-				"""Async generation - falls back to sync for now"""
-				return self._generate(messages, stop, run_manager, **kwargs)
+    """ChatModel implementation for SageMaker Sealion endpoint"""
 
+    endpoint_name: str
+    region_name: str = "us-east-1"
+    max_tokens: int = 1024 * 1
+    temperature: float = 0.7
+    top_p: float = 0.9
+    client: Any = None
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.client = boto3.client(
+            'sagemaker-runtime',
+            region_name=self.region_name
+        )
+
+    @property
+    def _llm_type(self) -> str:
+        return "sagemaker-sealion-chat"
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        run_pydantic: Optional[bool] = True,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Generate chat result from messages"""
+
+        # Format messages for Sealion
+        formatted_prompt = self._format_messages(messages)
+
+        try:
+            if run_pydantic:
+                # Prepare the payload
+                payload = {
+                    "inputs": formatted_prompt,
+                    "parameters": {
+                        "max_new_tokens": self.max_tokens,
+                        "temperature": self.temperature,
+                        "top_p": self.top_p,
+                        "do_sample": True,
+                        "return_full_text": False,
+                        "stop": stop or ["Human:", "\n\nHuman:", "Question:", "Observation:"]
+                    }
+                }
+            else:
+                payload = {
+                    "inputs": formatted_prompt,
+                    "parameters": {
+                        "max_new_tokens": self.max_tokens,
+                        "temperature": self.temperature,
+                        "top_p": self.top_p
+                    }
+                }
+
+            logger.debug(f"Sending to SageMaker: {formatted_prompt[:200]}...")
+
+            # Invoke the endpoint
+            response = self.client.invoke_endpoint(
+                EndpointName=self.endpoint_name,
+                ContentType='application/json',
+                Body=json.dumps(payload)
+            )
+
+            # Parse response
+            result = json.loads(response['Body'].read().decode())
+
+            # Extract generated text
+            if isinstance(result, list):
+                generated_text = result[0].get('generated_text', '')
+            elif isinstance(result, dict):
+                generated_text = result.get('generated_text', result.get('output', ''))
+            else:
+                generated_text = str(result)
+
+            logger.debug(f"Received from SageMaker: {generated_text[:200]}...")
+
+            # Create AIMessage with proper ChatGeneration
+            message = AIMessage(content=generated_text)
+            generation = ChatGeneration(message=message)
+
+            return ChatResult(generations=[generation])
+
+        except Exception as e:
+            logger.error(f"Error calling SageMaker endpoint: {str(e)}")
+            error_message = AIMessage(content=f"I apologize, but I encountered an error: {str(e)}")
+            generation = ChatGeneration(message=error_message)
+            return ChatResult(generations=[generation])
+
+    def _format_messages(self, messages: List[BaseMessage]) -> str:
+        """Format messages for Sealion model with better structure"""
+        formatted_prompt = ""
+
+        for message in messages:
+            if isinstance(message, SystemMessage):
+                formatted_prompt += f"<|system|>\n{message.content}\n\n"
+            elif isinstance(message, HumanMessage):
+                formatted_prompt += f"<|user|>\n{message.content}\n\n"
+            elif isinstance(message, AIMessage):
+                formatted_prompt += f"<|assistant|>\n{message.content}\n\n"
+            elif hasattr(message, 'content'):
+                # Handle other message types
+                formatted_prompt += f"{message.content}\n\n"
+
+        # Ensure we end properly for the model to continue
+        if not formatted_prompt.endswith("<|assistant|>\n"):
+            formatted_prompt += "<|assistant|>\n"
+
+        return formatted_prompt
+
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        run_pydantic: Optional[bool] = True,
+        **kwargs
+    ) -> ChatResult:
+        """Generate text based on the prompt and SageMaker model"""
+        loop = asyncio.get_running_loop()
+        bound = functools.partial(
+            self._generate, messages, stop, run_manager,run_pydantic, **kwargs
+        )
+        return await loop.run_in_executor(None, bound)
 
 # Tool implementations (using your original functions)
 def post_json(url: str, payload: Dict[str, Any], timeout: int = 30) -> Dict[str, Any]:
@@ -166,7 +188,7 @@ def get_json(url: str, timeout: int = 30) -> Dict[str, Any]:
 def load_sealion_chat(endpoint_name:str,query:str,
                         region_name:str="us-east-1",
                         temperature:float =0.3,
-                        max_tokens:int = 1024*5):
+                        max_tokens:int = 1024*2):
 
     client = SageMakerSealionChat(
 				endpoint_name=endpoint_name,
@@ -175,24 +197,24 @@ def load_sealion_chat(endpoint_name:str,query:str,
 				max_tokens=max_tokens
     )
     prompt = (f"""
-        You are an expert in extracting and summarizing remedies, including traditional medicines, 
-        natural approaches, and non-medicine techniques.
-        You will be given one or more articles from webpages. 
-        Focus on fast, effective, and safe first-line treatments that can help manage the illness before considering prescription medicines.
-        Extract and highlight key remedies, lifestyle practices, or natural techniques mentioned in the sources that may provide relief.
-        Do not include unnecessary details—prioritize only practical solutions that directly address the problem. 
-
-        Guidelines:  
-        - Focus only on remedies, treatments, or actionable techniques relevant to the illness.  
-        - Include both traditional and non-traditional methods if available.  
-        - Eliminate unnecessary details, filler text, and unrelated information.  
-        - Organize the output clearly, grouping remedies by type (e.g., herbal, dietary, lifestyle, non-medical).
-        - If possible, note precautions, effectiveness, or supporting context mentioned in the source.  
-        - Keep the summary concise but comprehensive, not exceeding 1000 words.  
-
-        Here is the illness to address: {query}  
-
-    """)
+            You are an expert in extracting and summarizing all the medicines stated in the articles given.
+            You will be given one or more articles from webpages. 
+            Focus on fast, effective, and safe first-line treatments that can help manage the illness before considering prescription medicines.
+            Extract and highlight key remedies, lifestyle practices, or natural techniques mentioned in the sources that may provide relief.
+            Do not include unnecessary details—prioritize only practical solutions that directly address the problem. 
+            
+            Guidelines:  
+            - Focus only on medicines, treatments, or actionable techniques relevant to the illness mentioned
+            - Prioritize medicines that are safe, accessible, and can be implemented quickly.
+            - Include both traditional and non-traditional methods if available.  
+            - Eliminate unnecessary details, filler text, and unrelated information.  
+            - Keep the summary concise but comprehensive, not exceeding 200-300 words.  
+            
+            RESTRICTIONS:
+            - Only summarize/extract informations given by the sources. Do not make up answers.
+            - Do not suggest prescription medicines or antibiotics.
+            Here is the illness to address: {query}
+        """)
     
     return client,prompt
 
@@ -202,7 +224,7 @@ async def scrape_one(
     semaphore: asyncio.Semaphore,
     max_retries: int = 3,
     base_delay: float = 1.0,
-    timeout_s: float = 90.0,
+    timeout_s: float = 20.0,
 ) -> Dict[str, Any]:
     """POST a single URL to Firecrawl with retries."""
     attempt = 0
@@ -261,7 +283,7 @@ def run_async_scraping(urls: List[str]) -> List[Dict[str, Any]]:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, scrape_all(urls))
-                return future.result(timeout=120)  # 2 minute timeout
+                return future.result(timeout=60)  # 1 minute timeout
         else:
             return loop.run_until_complete(scrape_all(urls))
     except RuntimeError:
@@ -274,13 +296,32 @@ def make_payload(url: str) -> Dict[str, Any]:
         "url": url
     }
 
-def gs_search_with_crawling(query: str, limit: int = 6, 
+def run_async_agenerate(client, messages):
+    """Wrapper to run async agenerate in sync context"""
+    try:
+        # Try to get existing event loop
+        loop = asyncio.get_event_loop()     
+        if loop.is_running():
+            # If loop is already running, create a new thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, client._agenerate(messages))
+                return future.result(timeout=20)  # 1 minute timeout
+        else:
+            return loop.run_until_complete(client._agenerate(messages))
+    except RuntimeError:
+        # No event loop exists, create new one
+        return asyncio.run(client._agenerate(messages))
+
+async def gs_search_with_crawling(query: str, limit: int = 6, 
                             crawl_top: int = 5,
-                            country_code : str=None) -> str:
+                            country_code : str=None,
+                            emit:Emit = None) -> str:
     """Enhanced Google Search that automatically crawls top results
         provides country code as well to set the searches on specific country.
     """
-    max_limit = 3
+    max_limit = 5
+    
     try:
         # Load all the necessary credentials
         API_KEY = os.getenv("GS_API")
@@ -288,20 +329,24 @@ def gs_search_with_crawling(query: str, limit: int = 6,
         results = []
         sec_endpoint = os.getenv("ENDPOINT_NAME2")
 
-        # Load 2nd enpoint config
+            # Load 2nd endpoint config
         client,prompt = load_sealion_chat(sec_endpoint,query)
         messages = [SystemMessage(content=prompt)]
-
-        # Fetch search results
-        for start in range(1, min(limit, 11), 5):
+        await emit_progress_message(0,f"Searching {query}...",emit=emit)
+        
+        # Initialize async client for http requests
+        async_client = httpx.AsyncClient()        # Fetch search results
+        for start in range(1, min(max_limit, 11), 5):
+            clean_query = query.split("\"")[0]
+            print("New Query: ",clean_query)
             url = (
                 "https://www.googleapis.com/customsearch/v1"
-                f"?key={API_KEY}&cx={CX}&q={query}&start={start}"
+                f"?key={API_KEY}&cx={CX}&q={query}&start={start}&num={max_limit}"
             ) 
             # Add Country code if stated
             if country_code:
                 url += f"&cr={country_code}"
-            print("Country code: ",country_code)
+            
             res = requests.get(url).json()
             if "items" in res:
                 for item in res["items"]:
@@ -323,33 +368,44 @@ def gs_search_with_crawling(query: str, limit: int = 6,
         #     formatted_results += f"   URL: {result['link']}\n"
         #     formatted_results += f"   Summary: {result['snippet']}\n\n"
         
-        # Extract URLs for crawling (top N results)
-        urls_to_crawl = [result['link'] for result in results[:crawl_top]]
-        
-        # Crawl the top URLs
-        formatted_results += f"\n--- DETAILED CONTENT FROM TOP {len(urls_to_crawl)} RESULTS ---\n\n"
-        
         # Extract URLs for scraping (top N results)
-        urls_to_scrape = [result['link'] for result in results[:crawl_top]]
-        print("List to scrape: ",urls_to_scrape)
+        urls_to_scrape = [result['link'] for result in results]
+        await emit_progress_message(0,f"Scraping top links: {urls_to_scrape}",emit=emit)
+        
         # Scrape the top URLs using async Firecrawl
         formatted_results += f"\n--- DETAILED CONTENT FROM TOP {len(urls_to_scrape)} RESULTS (via Firecrawl) ---\n\n"
         extract_crawl = []
         try:
             scrape_results = run_async_scraping(urls_to_scrape)
-            
-            for i, result in enumerate(scrape_results, 1):
-                formatted_results += f"=== CONTENT {i}: {result.get('url', 'Unknown URL')} ===\n"
-                # Extract content from Firecrawl response
-                data = result.get('data', {})
-                if isinstance(data, dict):
-                    content = data.get('content', data.get('markdown', data.get('text', str(data))))
-                else:
-                    content = str(data)
-                print("The result is out: ",content)
-                key_info = client._generate(messages + [f"\n\n{content}"])
-                if key_info.generations[0].message:
-                    extract_crawl.append(key_info.generations[0].message.content)
+            final_messages = []
+            for result in scrape_results:
+                if 'data' in result:
+                    final_messages.extend([SystemMessage(content=prompt), result['data']])
+
+            print("Run simoultaneous generation.")
+            results = run_async_agenerate(client, final_messages)
+            print("Type of results: ",type(results))
+            for gen in results.generations:
+                if gen.message:
+                    print("Content length: ",len(gen.message.content))
+                    print("Content: ",gen.message)
+                    extract_crawl.append(gen.message.content)
+            print("Finish all generation.")            
+            # for i, result in enumerate(scrape_results, 1):
+            #     print("Run")
+            #     formatted_results += f"=== CONTENT {i}: {result.get('url', 'Unknown URL')} ===\n"
+            #     # Extract content from Firecrawl response
+            #     data = result.get('data', {})
+            #     if isinstance(data, dict):
+            #         content = data.get('content', data.get('markdown', data.get('text', str(data))))
+            #     else:
+            #         content = str(data)
+                
+            #     print("Sending Content: ",len(content))
+            #     key_info = client._generate(messages + [f"\n\n{content[:4000]}"])
+            #     if key_info.generations[0].message:
+            #         extract_crawl.append(key_info.generations[0].message.content)
+            #     print("Finish Extraction")
                 
                 # Extract key information
                 # if content and len(content) > 50:
@@ -414,45 +470,6 @@ def crawl_multiple_urls(urls: List[str], max_workers: int = 3) -> Dict[str, str]
     
     return results
 
-
-def gs_search(query: str, limit: int = 11) -> str:
-    """Search Google Custom Search and return formatted results,
-        Better results can be obtained by giving local language.
-        Example: in Vietnam (query should be in vietnamese), Jakarta (should be indonesian)
-    """
-    try:
-        API_KEY = os.getenv("GS_API")
-        CX = os.getenv("CX")
-        results = []
-        
-        # Fetch results
-        for start in range(1, min(limit, 11), 5):
-            url = (
-                "https://www.googleapis.com/customsearch/v1"
-                f"?key={API_KEY}&cx={CX}&q={query}&start={start}"
-            )
-            res = requests.get(url).json()
-            if "items" in res:
-                for item in res["items"]:
-                    results.append({
-                        'title': item.get('title', ''),
-                        'link': item.get('link', ''),
-                        'snippet': item.get('snippet', '')
-                    })
-            else:
-                break
-        
-        # Format results for the agent
-        formatted_results = f"Search results for '{query}':\n\n"
-        for i, result in enumerate(results[:5], 1):
-            formatted_results += f"{i}. **{result['title']}**\n"
-            formatted_results += f"   URL: {result['link']}\n"
-            formatted_results += f"   Summary: {result['snippet']}\n\n"
-        
-        return formatted_results
-    except Exception as e:
-        return f"Search failed: {str(e)}"
-
 def crawl_url_with_polling_tool(
                                     target_url: str,
                                     crawl_base_url: Optional[str] = None,
@@ -499,6 +516,45 @@ def crawl_url_with_polling_tool(
         return f"Crawling did not complete within {max_wait_time_seconds} seconds"
     except Exception as e:
         return f"Crawling failed: {str(e)}"
+
+
+def gs_search(query: str, limit: int = 11) -> str:
+    """Search Google Custom Search and return formatted results,
+        Better results can be obtained by giving local language.
+        Example: in Vietnam (query should be in vietnamese), Jakarta (should be indonesian)
+    """
+    try:
+        API_KEY = os.getenv("GS_API")
+        CX = os.getenv("CX")
+        results = []
+        
+        # Fetch results
+        for start in range(1, min(limit, 11), 5):
+            url = (
+                "https://www.googleapis.com/customsearch/v1"
+                f"?key={API_KEY}&cx={CX}&q={query}&start={start}"
+            )
+            res = requests.get(url).json()
+            if "items" in res:
+                for item in res["items"]:
+                    results.append({
+                        'title': item.get('title', ''),
+                        'link': item.get('link', ''),
+                        'snippet': item.get('snippet', '')
+                    })
+            else:
+                break
+        
+        # Format results for the agent
+        formatted_results = f"Search results for '{query}':\n\n"
+        for i, result in enumerate(results[:5], 1):
+            formatted_results += f"{i}. **{result['title']}**\n"
+            formatted_results += f"   URL: {result['link']}\n"
+            formatted_results += f"   Summary: {result['snippet']}\n\n"
+        
+        return formatted_results
+    except Exception as e:
+        return f"Search failed: {str(e)}"
 
 def extract_crawl_first_item_tool(crawl_result: str) -> str:
     """Extract key information from crawl result text"""

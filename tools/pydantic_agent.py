@@ -3,20 +3,28 @@ from typing import Optional,List
 import requests
 import json
 from openai import OpenAI
-import re
+import re,asyncio
 from typing import List, Optional, Literal
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator, constr, conlist, ConfigDict
+import os 
+from dotenv import load_dotenv
+from tools.search_and_crawl import SageMakerSealionChat 
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
+from langchain_core.outputs import ChatResult, ChatGeneration
+from langchain_core.callbacks import CallbackManagerForLLMRun
+load_dotenv()
 
 # 1. Define schema with Pydantic
 class HealthQuery(BaseModel):
     illness: str = Field(..., description="Name of the illness or health condition")
     illness_explanation: str = Field(..., description="User's explanation on the illnesses, what he feels and experiences.")
-    destination_location: Optional[str] = Field(None, description="Current country or location of the user")
+    destination_location: Optional[str] = Field(None, description="Destination country or location of the user")
     origin_location: Optional[str] = Field(None, description="Origin country or location of the user")
-    query_translate_based_on_destination : Optional[str] = Field(None)
-    destination_code : str = Field(None,description="User's destination location country code based on ISO 3166-1 alpha-2")
-    origin_code : str = Field(None,description="User's destination location country code based on ISO 3166-1 alpha-2")
+    query_translate_based_on_destination : Optional[str] = Field("")
+    destination_code : Optional[str] = Field(None,description="User's destination location country code based on ISO 3166-1 alpha-2")
+    origin_code : Optional[str] = Field(None,description="User's origin location country code based on ISO 3166-1 alpha-2")
 
 # --- Helpers / Enums ---
 class Severity(str, Enum):
@@ -65,7 +73,6 @@ class NonPharmacologicMethod(BaseModel):
         description="Caveats, contraindications, or safety notes.",
         examples=["Avoid if skin is broken or sensitive to heat."],
     )
-
 class MedicineDetails(BaseModel):
     """
     A single recommended medicine or remedy with basic instructions and (optional) dosage.
@@ -75,10 +82,19 @@ class MedicineDetails(BaseModel):
     medicine_name: NonEmptyShort = Field(
         ...,
         description=(
-            "The recommended medicine/remedy (can be conventional, traditional, or herbal). "
-            "Use generic names when possible (e.g., 'ibuprofen', 'ginger tea')."
+            "The recommended medicine/remedy that the traveler can realistically buy and consume. "
+            "This can be conventional (e.g., 'ibuprofen'), branded traditional herbal medicine (e.g., 'Tolak Angin'), "
+            "or local packaged remedy/food product (e.g., 'Nin Jiom Pei Pa Koa syrup'). "
+            "⚠️ Do NOT return only ingredients (e.g., 'ginger', 'turmeric leaves'). "
+            "Focus on consumable products, branded remedies, or ready-to-use formulations available in the origin or destination country."
         ),
-        examples=["ibuprofen", "ginger tea", "honey + lemon"],
+        examples=[
+            "ibuprofen",
+            "Tolak Angin",
+            "Nin Jiom Pei Pa Koa",
+            "Panadol",
+            "Kampo (Shoseiryuto extract granules)"
+        ],
     )
 
     medicine_instruction: NonEmptyText = Field(
@@ -221,60 +237,88 @@ class ExtractUserIllness:
         # Get the raw translation string
         translation = query_translate.choices[0].message.content.strip()
         return translation
-    def retrieve_response(self,query,destination_country = None,origin_country = None,extraction_purpose = "health"):
+    async def retrieve_response(self,query,
+                                    destination_country = None,
+                                    origin_country = None,
+                                    extraction_purpose = "health"):
         # 1. Define Pydantic Format
         if extraction_purpose == "medicine":
             PydanticFormat = MedicineQuery
         else:
             PydanticFormat = HealthQuery
-        
-        prompt = f"""
+        system_prompt = SystemMessage(f"""
+                                        You are the excellent medical information extractor recommending 
+                                        to buy remedies or traiditional herbal medicine in {destination_country}.
+                                        """)
+        prompt = [HumanMessage(f"""
                     Extract structured health query information from the following text:
 
                     Text: "{query}"
 
                     Return JSON strictly in this schema:
                     {PydanticFormat.schema()}
-                    """
+                    """)]
 
 
-        completion = self.client.chat.completions.create(
-            model=self.SEALION_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": f"""You are a medical information extractor recommending to buy remedies or traiditional herbal medicine in {destination_country}. 
-                                    Always return output as valid JSON that follows the schema (remember to input the {destination_country} terms and translate everything to {origin_country}): """
-                                    f"{PydanticFormat.schema()}"
-                },
-                {
-                    "role": "user",
-                    "content": f"""
-                        {prompt}
-                    """
-                }
-            ],
-            extra_body={
-                "chat_template_kwargs": {
-                    "thinking_mode": "off"
-                }
-            },
-            temperature=0.0
-        )
-               
-        # Parse output
-        result_text = completion.choices[0].message.content.strip()
-
+        # completion = self.client.chat.completions.create(
+        #     model=self.SEALION_MODEL,
+        #     messages=[
+        #         {
+        #             "role": "system",
+        #             "content": f"""You are a medical information extractor recommending to buy remedies or traiditional herbal medicine in {destination_country}. 
+        #                             Always return output as valid JSON that follows the schema (remember to input the {destination_country} terms and translate everything to {origin_country}): """
+        #                             f"{PydanticFormat.schema()}"
+        #         },
+        #         {
+        #             "role": "user",
+        #             "content": f"""
+        #                 {prompt}
+        #             """
+        #         }
+        #     ],
+        #     extra_body={
+        #         "chat_template_kwargs": {
+        #             "thinking_mode": "off"
+        #         }
+        #     },
+        #     temperature=0.0
+        # )
+        # import boto3
+        # boto3.Session()
+        
+        # client = boto3.client(
+        #             'sagemaker-runtime',
+        #             region_name="us-east-1"
+        #         )
+        
+        # response = client.invoke_endpoint(
+        #         EndpointName=endpoint_name,
+        #         ContentType='application/json',
+        #         Body=json.dumps(prompt)
+        #     )
+        
+        # generated_text =json.loads(response['Body'].read().decode())
+        endpoint_name = os.getenv("ENDPOINT_NAME","Unkown")
+        client = SageMakerSealionChat(
+                    endpoint_name=endpoint_name,
+                    region_name="us-east-1",
+                    temperature=0.7,
+                    max_tokens=1024*2
+                )
+        response = await asyncio.gather(*(client._agenerate([system_prompt] + [m]) for m in prompt))
+        generated_text = response[0]
+        
         try:
-            clean_text = re.sub(r"^```json|```$", "", result_text.strip(), flags=re.MULTILINE).strip()
+            print(generated_text)
+            clean_text = re.sub(r"^```json|```$", "", generated_text.generations[0].message.content.strip(), 
+                                                    flags=re.MULTILINE).strip()
 
             parsed = PydanticFormat.parse_raw(clean_text)
             if extraction_purpose == "health":
-                print("in")
                 parsed.query_translate_based_on_destination = self.retrieve_query_translate(f"Illness name: {parsed.illness} with {parsed.illness_explanation}",parsed.destination_location)
             
             print("✅ Parsed result:", parsed.dict())
             return parsed.dict()
         except Exception as e:
-            print("❌ Validation failed:", e)
-            print("Raw output:", result_text)
+            raise Exception(f"Validation failed as {e}")
+            
