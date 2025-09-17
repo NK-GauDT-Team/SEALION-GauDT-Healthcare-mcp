@@ -25,6 +25,11 @@ class HealthQuery(BaseModel):
     query_translate_based_on_destination : Optional[str] = Field("")
     destination_code : Optional[str] = Field(None,description="User's destination location country code based on ISO 3166-1 alpha-2")
     origin_code : Optional[str] = Field(None,description="User's origin location country code based on ISO 3166-1 alpha-2")
+    origin_language : Optional[str] = Field(None,description="Based on origin country or language the query provided, \
+                                                                assume his origin language")
+    destination_language : Optional[str] = Field("English",description="User's destination location language")
+    important_things_to_note : Optional[str] = Field(None,description="Any important things to note based on the user's health condition, \
+                                                                        origin and destination location, his alergic or any other notes.")
 
 # --- Helpers / Enums ---
 class Severity(str, Enum):
@@ -172,7 +177,9 @@ class MedicineQuery(BaseModel):
     medicine_details: conlist(MedicineDetails, min_length=1) = Field(
         ...,
         description=(
-            "List of one or more recommended medicines/remedies with instructions and optional dosage."
+            "List of one or more recommended medicines/remedies with their instructions and dosage (if applicable). "
+            "Or any explanations of the ingredients, potential interactions, or analysis of why these medicines \
+                could help alleviate the illness"
         ),
     )
 
@@ -240,6 +247,8 @@ class ExtractUserIllness:
     async def retrieve_response(self,query,
                                     destination_country = None,
                                     origin_country = None,
+                                    origin_language = None,
+                                    destination_language = None,
                                     extraction_purpose = "health"):
         # 1. Define Pydantic Format
         if extraction_purpose == "medicine":
@@ -250,14 +259,22 @@ class ExtractUserIllness:
                                         You are the excellent medical information extractor recommending 
                                         to buy remedies or traiditional herbal medicine in {destination_country}.
                                         """)
-        prompt = [HumanMessage(f"""
+        normal_prompt = f"""
                     Extract structured health query information from the following text:
 
                     Text: "{query}"
 
                     Return JSON strictly in this schema:
                     {PydanticFormat.schema()}
-                    """)]
+                    """
+        if origin_country is not None and destination_country is not None:
+            normal_prompt += f"""
+                                Ensure all location-specific terms are relevant to {destination_country} with {destination_language} language.
+                                Translate any non-{origin_country} explanation into {origin_country} and {origin_language} language.
+                                Keep english form medicine name in {destination_country} terms only. 
+                                All explanations must be translated into {origin_country} and {origin_language} language.
+                            """
+        prompt = [HumanMessage(normal_prompt)]
 
 
         # completion = self.client.chat.completions.create(

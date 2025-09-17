@@ -227,9 +227,15 @@ class SealionReActAgent:
 										await emit_progress_message(iteration + 4,f"Generating Final Answer..",emit=emit)
 										await asyncio.sleep(1)
 										messages.append(AIMessage(content=response_text))
-										messages.append(HumanMessage(content="""Summarize the content of previous conversation to TODOLIST to the user.
-																														Only generate response based on provided conversation. Do not make up answers.
-																				"""))
+										messages.append(HumanMessage(content="""Summarize the previous conversation into a single, 
+																														information-rich paragraph that clearly presents a to-do list of actions along 
+																														with all explicitly mentioned medical names, explanations, dosages, and analyses; 
+																														include as many trusted medicines and references as possible; 
+																														highlight medical explanations under an Analysis section inside the paragraph; 
+																														ensure all content is taken only from the provided conversation (no invention or assumptions),
+																														phrase the output confidently as coming from trusted sources, 
+																														and strictly avoid hallucination or unsupported details.
+																																								"""))
 										
 						except Exception as e:
 								logger.error(f"Error in iteration {iteration + 1}: {str(e)}")
@@ -269,7 +275,7 @@ class SealionMCPAgent:
 			endpoint_name: str,
 			region_name: str = "us-east-1",
 			temperature: float = 0.3,  # Lower temperature for better tool following
-			max_tokens: int = 1024     # Reduced for more focused responses
+			max_tokens: int = 1024*5     # Reduced for more focused responses
 	):
 		
 		# Initialize the Chat Model

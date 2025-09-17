@@ -164,11 +164,14 @@ async def main_app(query : str,emit:Emit):
             for google searching: {illness_extraction['origin_code']}"
         f"User destination location : {illness_extraction['destination_location']} and destination country \
                 code for google searching: {illness_extraction['destination_code']}"
+        f"User origin language : {illness_extraction['origin_language']}"
+        f"User destination language : {illness_extraction['destination_language']}"
+        f"Any important things to note : {illness_extraction['important_things_to_note']}"
     )
     await emit_progress_message(3,"Calling agent to generate response.",emit=emit)
     # 1. Get medicine based on their own country
     try:
-        async with asyncio.timeout(300):  # 5 minutes timeout
+        async with asyncio.timeout(900):  # 15 minutes timeout
             response = await agent.invoke(query_formatting, max_iterations=15,
                                                 origin_country=illness_extraction['origin_location'],
                                                 destination_country=illness_extraction['destination_location'],

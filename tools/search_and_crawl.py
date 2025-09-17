@@ -283,7 +283,7 @@ def run_async_scraping(urls: List[str]) -> List[Dict[str, Any]]:
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(asyncio.run, scrape_all(urls))
-                return future.result(timeout=60)  # 1 minute timeout
+                return future.result(timeout=20)  # 1 minute timeout
         else:
             return loop.run_until_complete(scrape_all(urls))
     except RuntimeError:
