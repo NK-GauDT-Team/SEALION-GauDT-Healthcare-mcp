@@ -14,7 +14,6 @@ import contextlib
 
 app = FastAPI()
 
-
 # Allow your frontend origin during dev. Use a specific origin in prod.
 app.add_middleware(
     CORSMiddleware,
@@ -172,7 +171,7 @@ async def stream(query:str = None):
             await emit("status", {"status": "started"}, id_="0")
             # Run your app with the emitter wired in
             await main_app(query=query,emit=emit)
-            await emit("complete", {"status": "done"},id_="9999")
+            # await emit("complete", {"status": "done"},id_="9999")
         except asyncio.CancelledError:
             # Client disconnected; allow graceful cleanup
             raise

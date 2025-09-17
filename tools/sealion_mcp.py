@@ -127,7 +127,7 @@ class SealionReActAgent:
 				for iteration in range(max_iterations):
 						try:
 								logger.info(f"Starting iteration {iteration + 1}")
-        				await emit_progress_message(iteration + 4,f"Starting iteration {iteration + 1}",emit=emit)
+								await emit_progress_message(iteration + 4,f"Starting iteration {iteration + 1}",emit=emit)
 								# Get LLM response using async version
 								result = await self.llm._agenerate(messages)
 								response_text = result.generations[0].message.content.strip()
@@ -135,8 +135,8 @@ class SealionReActAgent:
 								if self.verbose:
 									print(f"\n--- Iteration {iteration + 1} ---")
 									print(f"LLM Response: {response_text[:300]}...")
-         					await emit_progress_message(iteration + 4,f"Starting iteration {iteration + 1} - \
-                									LLM Response: {response_text[:100]}",emit=emit)
+									await emit_progress_message(iteration + 4,f"Starting iteration {iteration + 1} - \
+																	LLM Response: {response_text[:100]}",emit=emit)
 								if "Final Answer:" in response_text:
 									final_answer = response_text.split("Final Answer:")[-1].strip()
 
@@ -193,6 +193,7 @@ class SealionReActAgent:
 													action_input,cc = action_input.split("country_code=")[0],action_input.split("country_code=")[1]
 												
 												try:
+														await emit_progress_message(iteration + 4,f"Executing Queries: {action_name}",emit=emit)
 														if cc:
 															tool_result = await self.tool_map[action_name].func(action_input,country_code=cc,emit=emit)
 														else:
