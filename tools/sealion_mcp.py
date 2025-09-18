@@ -51,8 +51,8 @@ class SealionReActAgent:
 				system_prompt = f""" 
 										You are a Travel Health Assistant helping travelers.  
 										Your role is to provide locally available medicines, branded herbal medicines, 
-          					or traditional herbal supplements that travelers can immediately buy and consume 
-               			for first-line treatment of common illnesses.  
+											or traditional herbal supplements that travelers can immediately buy and consume 
+										for first-line treatment of common illnesses.  
 
 										You have access to these tools:  
 
@@ -64,7 +64,7 @@ class SealionReActAgent:
 											- ✅ Example: Tolak Angin (contains ginger, mint, honey, etc.)  
 											- ❌ Not acceptable: ginger tea or ginger root.  
 										- Prioritize medicines that are easily purchasable in the {destination_country}
-          						(pharmacies, convenience stores, traditional medicine shops).  
+          									(pharmacies, convenience stores, traditional medicine shops).  
 										- Provide multiple local options if available.  
 										- When sending queries to the tools, you MUST use the **local language of the origin or destination country** (e.g., Bahasa Indonesia in Indonesia, Japanese in Japan, Mandarin in China, Thai in Thailand). This ensures you retrieve remedies that are actually sold and recognized locally.  
 
@@ -76,20 +76,25 @@ class SealionReActAgent:
 										Observation: [tool result will appear here]  
 										... (repeat Thought/Action/Action Input/Observation as needed)  
 										Thought: [final reasoning]  
-										Final Answer: [your complete answer to the user]  
+										Final Answer: [If you thought that all the necessary answer is found, provide a concise, actionable answer for the user. Return this.]   
 
-										Guidance steps (origin-to-destination mapping):  
-										1) Origin country context (for comparison only):  
+										Tools utilization guidance steps (origin-to-destination mapping):  
+										1) Illness understanding context (required):	
+											- Identify the illness or symptoms from the user query.
+											- Search using the local language of the {origin_country} to understand the illness and don't assume or hallucinate.	
+											- This step is crucial to ensure you correctly identify what the traveler is seeking treatment for.
+          
+          								2) Origin country context (for comparison only):  
 											- Search in {origin_country}, using the local language of {origin_country}, to identify common branded herbal medicines or traditional supplements used for the user’s illness.  
 											- This step is for understanding what the traveler might already be familiar with.  
 											- Do NOT stop here — continue to the destination search.  
 
-										2) Destination-focused search (required for output):  
+										3) Destination-focused search (required for output):  
 											- Search in {destination_country}, using the local language of {destination_country}, for herbal medicines, branded traditional remedies, or supplements that are available for the same illness.  
 											- Look for products that match or are equivalent to the origin-country remedies, but available locally.  
 											- Prioritize remedies that can be realistically bought at pharmacies, convenience stores, traditional medicine shops, or online marketplaces in {destination_country}.  
 
-										3) Destination-ready output:  
+										4) Destination-ready output:  
 											- Return a list of **specific branded herbal medicines or traditional supplements available in {destination_country}** that the traveler can buy and consume immediately.  
 											- For each product include:  
 												• Product/brand name (local name)  
@@ -118,30 +123,102 @@ class SealionReActAgent:
 				"""Execute the agent with better tool parsing and execution"""
 				
 				prompt = self._create_react_prompt(query,origin_country=origin_country,
-                           										destination_country=destination_country)
+                           											destination_country=destination_country)
 				intermediate_steps = []
 				
 				# Start the conversation
 				messages = [SystemMessage(content=prompt)]
-				
+				all_response_for_summarization = []
 				for iteration in range(max_iterations):
 						try:
 								logger.info(f"Starting iteration {iteration + 1}")
 								await emit_progress_message(iteration + 4,f"Starting iteration {iteration + 1}",emit=emit)
 								# Get LLM response using async version
 								result = await self.llm._agenerate(messages)
-								response_text = result.generations[0].message.content.strip()
-
+								if isinstance(result.generations[0].message.content, str):
+									response_text = result.generations[0].message.content.strip()
+								elif isinstance(result.generations[0].message.content, list):
+									response_text = result.generations[0].message.content.content[0].strip()
+								else:
+									raise Exception("Unexpected response format from LLM.")
 								if self.verbose:
 									print(f"\n--- Iteration {iteration + 1} ---")
 									print(f"LLM Response: {response_text[:300]}...")
 									await emit_progress_message(iteration + 4,f"Starting iteration {iteration + 1} - \
 																	LLM Response: {response_text[:100]}",emit=emit)
 								if "Final Answer:" in response_text:
-									final_answer = response_text.split("Final Answer:")[-1].strip()
+									# final_answer = response_text.split("Final Answer:")[-1].strip()
+									# print("All contents: "," ".join(all_response_for_summarization))
+									new_messages = [SystemMessage(content=f""" 
 
+																			You are an expert medical information synthesizer specializing in creating comprehensive, multilingual treatment summaries from conversation histories.
+
+																			Your task is to synthesize the entire conversation buffer (user queries + article summarizations) into a single, information-rich paragraph that serves as a complete treatment guide.
+
+																			## MULTILINGUAL REQUIREMENTS:
+																			- Preserve ALL medicine names in their original languages (Indonesian, Malay, Thai, Vietnamese, Chinese, etc.) but MUST EXISTS IN DESTINATION COUNTRY.
+																			- Maintain format: [Original Name] ([English/Scientific name if available])
+																			- Include traditional medicine terminology (jamu, ramuan, ubat tradisional, etc.)
+																			- Preserve regional variations and cultural context
+																			- Keep dosage instructions in original language when specified
+
+																			## SYNTHESIS STRUCTURE:
+																			Create comprehensive paragraphs containing:
+
+																			**Treatment Action Plan**: Start with a clear sequence of recommended actions, incorporating all medicines and treatments mentioned across the conversation, organized by urgency/effectiveness as discussed.
+
+																			**Complete Medicine Inventory**: Include ALL medicines mentioned with:
+																			- Original names (temulawak, sambiloto, mengkudu, etc.)
+																			- Scientific names when provided
+																			- Exact dosages and preparation methods as stated
+																			- Frequency and duration of use
+																			- Administration methods (minum, oles, kompres, etc.)
+
+																			**Analysis Section**: Within the paragraph, include a dedicated "Analysis:" subsection that synthesizes all medical explanations, mechanisms of action, effectiveness studies, contraindications, and expert opinions mentioned throughout the conversation.
+
+																			## QUALITY STANDARDS:
+																			- Extract ONLY from the provided conversation buffer
+																			- Include specific dosages, preparation methods, timing
+																			- Preserve exact medicine names and spellings
+																			- Maintain cultural context of traditional remedies
+																			- Include all safety warnings and contraindications mentioned
+																			- Reference effectiveness claims as stated in sources
+																			- Preserve multilingual medical terminology
+																			- Provide all the details mentioned in the contents
+
+																			## CONFIDENCE PHRASING:
+																			- Use phrases like "Based on the reviewed sources..." 
+																			- "The compiled evidence indicates..."
+																			- "Traditional practices documented include..."
+																			- "Clinical information provided suggests..."
+																			- Avoid uncertainty language - present information as documented facts
+
+																			## OUTPUT FORMAT:
+																			Comprehensive paragraphs structure:
+																			"Based on the reviewed medical sources and traditional knowledge compiled, the recommended treatment approach for [condition] involves [action sequence with all medicines in original languages]. [Detailed medicine inventory with dosages]. Analysis: [All medical explanations, mechanisms, studies, and expert insights synthesized]. [Safety considerations and contraindications as documented]."
+
+																			## CONVERSATION BUFFER TO SYNTHESIZE:
+																			Please synthesize the following conversation history into a comprehensive treatment summary:
+
+																			[Conversation buffer will be provided here]
+
+																			CRITICAL: Include every medicine name, dosage, and explanation mentioned. Do not omit any traditional or multilingual medicine names. Present as a single, flowing paragraph that serves as a complete treatment reference guide.
+																		""")]
+									new_messages.append(HumanMessage(content=f"""
+																			This is user query of his illnesses and destination country : {query}\
+																			Here are all the contents: {" ".join(all_response_for_summarization)}
+																		"""))
+									# print("Final Messages: ",new_messages)
+									result = await self.llm._agenerate(new_messages)
+									final_answer = None
+									# print("Final LLM Result:", result)
+									for gen in result.generations:
+										if gen and all(word not in gen.message.content for word in ('Okay', 'ready')):
+											final_answer = gen.message.content.strip()
+											break
+									
 									return {
-											"output": final_answer,
+											"output": " ".join(all_response_for_summarization),
 											"intermediate_steps": intermediate_steps
 									}
 								
@@ -204,7 +281,8 @@ class SealionReActAgent:
 														# Add to conversation
 														messages.append(AIMessage(content=response_text))
 														messages.append(HumanMessage(content=f"Observation: {tool_result}"))
-														
+														all_response_for_summarization.append(str(tool_result))
+
 														if self.verbose:
 																print(f"Tool result: {tool_result[:100]}...")
               
@@ -227,15 +305,6 @@ class SealionReActAgent:
 										await emit_progress_message(iteration + 4,f"Generating Final Answer..",emit=emit)
 										await asyncio.sleep(1)
 										messages.append(AIMessage(content=response_text))
-										messages.append(HumanMessage(content="""Summarize the previous conversation into a single, 
-																														information-rich paragraph that clearly presents a to-do list of actions along 
-																														with all explicitly mentioned medical names, explanations, dosages, and analyses; 
-																														include as many trusted medicines and references as possible; 
-																														highlight medical explanations under an Analysis section inside the paragraph; 
-																														ensure all content is taken only from the provided conversation (no invention or assumptions),
-																														phrase the output confidently as coming from trusted sources, 
-																														and strictly avoid hallucination or unsupported details.
-																																								"""))
 										
 						except Exception as e:
 								logger.error(f"Error in iteration {iteration + 1}: {str(e)}")
@@ -243,17 +312,17 @@ class SealionReActAgent:
 				await emit_progress_message(iteration + 4,f"Error happened, executing fallback function to generate final answer.",emit=emit)
 				# Fallback response if iterations exhausted
 				fallback_msg = """"I need to search for current information first, 
-														but let me provide some general guidance based on your query."""
+									but let me provide some general guidance based on your query."""
 				
 				# Try one final generation asking for direct answer
 				try:
 						fallback_messages = [
-								SystemMessage(content=f"""Previous discussion : {messages}.
+								SystemMessage(content=f"""Previous discussion : {" ".join(all_response_for_summarization)}.
 															You are a helpful travel health assistant. 
 															Provide practical advice for the user's health concern while traveling."""),
 								HumanMessage(content=query + "\n\nPlease provide practical, actionable advice.")
 						]
-						
+						print("All contents: "," ".join(all_response_for_summarization))
 						final_result = await self.llm._agenerate(messages)
 						fallback_response = final_result.generations[0].message.content.strip()
 						print("Pass through fallback response")
@@ -325,9 +394,9 @@ class SealionMCPAgent:
 		"""
 		"""Invoke the agent with a query"""
 		return await self.agent.execute(query, max_iterations=max_iterations,
-              											origin_country=origin_country,
-                           					destination_country = destination_country,
-                                		emit=emit)
+												origin_country=origin_country,
+												destination_country = destination_country,
+												emit=emit)
 
 # Configuration class
 class SealionConfig(BaseModel):

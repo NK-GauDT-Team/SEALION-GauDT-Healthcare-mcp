@@ -38,10 +38,8 @@ class Severity(str, Enum):
     high = "high"
     emergency = "emergency"
 
-
 NonEmptyShort = constr(strip_whitespace=True, min_length=1, max_length=120)
 NonEmptyText  = constr(strip_whitespace=True, min_length=1, max_length=2000)
-
 
 # --- Models ---
 class NonPharmacologicMethod(BaseModel):
@@ -200,7 +198,7 @@ class MedicineQuery(BaseModel):
     )
 
     severity: Severity = "low"
-
+    query_translate_based_on_destination : Optional[str] = Field("")
 class ExtractUserIllness:
     def __init__(self,api_key : str,model_name:str):
         self.API_KEY = api_key
@@ -228,7 +226,7 @@ class ExtractUserIllness:
                                                     - Return only the translated text (no explanations, no prefixes).
                                                     - Include the medical term for the illness in {destination_language}.
                                                     - Expand the query with common phrases that help in searching for treatments, 
-                                                    cures, or remedies.
+                                                        cures, or remedies.
                                                     - Output must be a single clean sentence in {destination_language}, 
                                                     suitable for internet search.
                                                 """
@@ -333,6 +331,8 @@ class ExtractUserIllness:
             parsed = PydanticFormat.parse_raw(clean_text)
             if extraction_purpose == "health":
                 parsed.query_translate_based_on_destination = self.retrieve_query_translate(f"Illness name: {parsed.illness} with {parsed.illness_explanation}",parsed.destination_location)
+            else:
+                parsed.query_translate_based_on_destination = self.retrieve_query_translate(f"{parsed.dict()}",destination_language=origin_country)
             
             print("✅ Parsed result:", parsed.dict())
             return parsed.dict()

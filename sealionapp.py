@@ -97,6 +97,7 @@ def testing_result():
               "severity": "low"
           }
       }
+
 async def main_app(query : str,emit:Emit):
     # Load environment variables from .env file
     load_dotenv()
@@ -105,6 +106,10 @@ async def main_app(query : str,emit:Emit):
     s=boto3.Session()
     # print("method:", s.get_credentials().method)           # should be 'iam-role'
     # print(boto3.client("sts").get_caller_identity())
+    
+    if query is None or query.strip() == "":
+        await emit_complete_message(999,"No query provided.",emit=emit,data=testing_result())
+        return testing_result()
     
     # Configure logging
     logging.basicConfig(level=logging.INFO)
@@ -171,7 +176,7 @@ async def main_app(query : str,emit:Emit):
     await emit_progress_message(3,"Calling agent to generate response.",emit=emit)
     # 1. Get medicine based on their own country
     try:
-        async with asyncio.timeout(900):  # 15 minutes timeout
+        async with asyncio.timeout(2000):  # 35 minutes timeout
             response = await agent.invoke(query_formatting, max_iterations=15,
                                                 origin_country=illness_extraction['origin_location'],
                                                 destination_country=illness_extraction['destination_location'],
@@ -191,17 +196,17 @@ async def main_app(query : str,emit:Emit):
     print("="*60)
     print(response.get("output", "No response generated"))
 
-    if response.get("intermediate_steps"):
-        print("\n" + "="*60)
-        print("TOOL USAGE:")
-        print("="*60)
-        for i, step in enumerate(response.get("intermediate_steps", [])):
-            if len(step) >= 3:
-                print(f"\nStep {i+1}:")
-                print(f"  Tool: {step[0]}")
-                print(f"  Input: {step[1]}")
-                print(f"  Result: {step[2][:200]}..." if len(step[2]) > 200 else f"  Result: {step[2]}")
-
+    # if response.get("intermediate_steps"):
+    #     print("\n" + "="*60)
+    #     print("TOOL USAGE:")
+    #     print("="*60)
+    #     for i, step in enumerate(response.get("intermediate_steps", [])):
+    #         if len(step) >= 3:
+    #             print(f"\nStep {i+1}:")
+    #             print(f"  Tool: {step[0]}")
+    #             print(f"  Input: {step[1]}")
+    #             print(f"  Result: {step[2][:200]}..." if len(step[2]) > 200 else f"  Result: {step[2]}")
+    await emit_progress_message(4,"Generating final response for user by summarizing every articles found...",emit=emit)
     final_response = await extraction_model.retrieve_response(response,extraction_purpose="medicine",
                                                                     destination_country=illness_extraction['destination_location'],
                                                                     origin_country=illness_extraction['origin_location'])

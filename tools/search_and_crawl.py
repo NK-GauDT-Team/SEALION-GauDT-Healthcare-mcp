@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 import functools
 import asyncio
 from typing import Callable, Awaitable, Any
+import concurrent
 
 Emit = Callable[[str, Any, str | None], Awaitable[None]]
 # Load environment variables from .env file
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 FIRECRAWL_BASE = os.getenv("CRAWLER_BASE_URL", "http://ec2-13-251-44-139.ap-southeast-1.compute.amazonaws.com:3002")
 SCRAPE_ENDPOINT = f"{FIRECRAWL_BASE}/v1/scrape"
 HEADERS = {"Content-Type": "application/json"}
-
+IS_SCRAPE = True
 # Keep this equal to your Playwright workers to avoid queueing contention
 MAX_CONCURRENCY = int(os.getenv("SCRAPER_CONCURRENCY", "3"))
 
@@ -67,77 +68,103 @@ class SageMakerSealionChat(BaseChatModel):
     def _llm_type(self) -> str:
         return "sagemaker-sealion-chat"
 
+
+    async def _agenerate(
+            self,
+            messages: List[BaseMessage],
+            stop: Optional[List[str]] = None,
+            run_manager=None,
+            run_pydantic: Optional[bool] = True,
+            **kwargs
+        ) -> ChatResult:
+        """Async wrapper for SageMaker Async Inference call."""
+        loop = asyncio.get_running_loop()
+        bound = functools.partial(
+            self._generate, messages, stop, run_manager, run_pydantic, **kwargs
+        )
+        # run in thread to avoid blocking event loop
+        return await loop.run_in_executor(None, bound)
+
+
     def _generate(
         self,
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        run_manager=None,
         run_pydantic: Optional[bool] = True,
-        **kwargs: Any,
+        **kwargs
     ) -> ChatResult:
-        """Generate chat result from messages"""
+        """Submit request to SageMaker Async Inference and fetch from S3."""
 
-        # Format messages for Sealion
         formatted_prompt = self._format_messages(messages)
+        payload = {
+            "inputs": formatted_prompt,
+            "parameters": {
+                "max_new_tokens": self.max_tokens,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "do_sample": True,
+                "return_full_text": False,
+                "stop": stop or ["Human:", "\n\nHuman:", "Question:", "Observation:"]
+            },
+        }
 
         try:
-            if run_pydantic:
-                # Prepare the payload
-                payload = {
-                    "inputs": formatted_prompt,
-                    "parameters": {
-                        "max_new_tokens": self.max_tokens,
-                        "temperature": self.temperature,
-                        "top_p": self.top_p,
-                        "do_sample": True,
-                        "return_full_text": False,
-                        "stop": stop or ["Human:", "\n\nHuman:", "Question:", "Observation:"]
-                    }
-                }
-            else:
-                payload = {
-                    "inputs": formatted_prompt,
-                    "parameters": {
-                        "max_new_tokens": self.max_tokens,
-                        "temperature": self.temperature,
-                        "top_p": self.top_p
-                    }
-                }
-
-            logger.debug(f"Sending to SageMaker: {formatted_prompt[:200]}...")
-
-            # Invoke the endpoint
-            response = self.client.invoke_endpoint(
-                EndpointName=self.endpoint_name,
-                ContentType='application/json',
+            # Step 1: Upload input payload to S3
+            input_key = f"async-inputs/{int(time.time())}.json"
+            async_bucket = f"sealion-mcp-async-results-bucket"
+            import boto3
+            s3_client = boto3.client("s3")
+            s3_client.put_object(
+                Bucket=async_bucket,
+                Key=input_key,
                 Body=json.dumps(payload)
             )
+            input_location = f"s3://{async_bucket}/{input_key}"
 
-            # Parse response
-            result = json.loads(response['Body'].read().decode())
+            # Step 2: Send async request using InputLocation
+            response = self.client.invoke_endpoint_async(
+                EndpointName=self.endpoint_name,
+                InputLocation=input_location,
+                InferenceId=f"req-{int(time.time())}",
+                ContentType="application/json",
+            )
 
-            # Extract generated text
+            # Step 3: Parse output S3 location
+            output_location = response["OutputLocation"]
+            assert output_location.startswith("s3://"), f"Unexpected output location: {output_location}"
+            no_prefix = output_location.replace("s3://", "")
+            bucket, key = no_prefix.split("/", 1)
+
+            # Step 4: Poll until result is available
+            while True:
+                try:
+                    obj = s3_client.get_object(Bucket=bucket, Key=key)
+                    body = obj["Body"].read().decode()
+                    result = json.loads(body)
+                    break
+                except s3_client.exceptions.NoSuchKey:
+                    time.sleep(2)  # wait and retry
+
+            # Step 5: Extract generated text
             if isinstance(result, list):
-                generated_text = result[0].get('generated_text', '')
+                generated_text = result[0].get("generated_text", "")
             elif isinstance(result, dict):
-                generated_text = result.get('generated_text', result.get('output', ''))
+                generated_text = result.get("generated_text", result.get("output", ""))
             else:
                 generated_text = str(result)
 
-            logger.debug(f"Received from SageMaker: {generated_text[:200]}...")
-
-            # Create AIMessage with proper ChatGeneration
             message = AIMessage(content=generated_text)
             generation = ChatGeneration(message=message)
-
             return ChatResult(generations=[generation])
 
         except Exception as e:
-            logger.error(f"Error calling SageMaker endpoint: {str(e)}")
-            error_message = AIMessage(content=f"I apologize, but I encountered an error: {str(e)}")
+            error_message = AIMessage(content=f"SageMaker async error: {str(e)}")
             generation = ChatGeneration(message=error_message)
             return ChatResult(generations=[generation])
 
+
+    
     def _format_messages(self, messages: List[BaseMessage]) -> str:
         """Format messages for Sealion model with better structure"""
         formatted_prompt = ""
@@ -159,21 +186,6 @@ class SageMakerSealionChat(BaseChatModel):
 
         return formatted_prompt
 
-    async def _agenerate(
-        self,
-        messages: List[BaseMessage],
-        stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
-        run_pydantic: Optional[bool] = True,
-        **kwargs
-    ) -> ChatResult:
-        """Generate text based on the prompt and SageMaker model"""
-        loop = asyncio.get_running_loop()
-        bound = functools.partial(
-            self._generate, messages, stop, run_manager,run_pydantic, **kwargs
-        )
-        return await loop.run_in_executor(None, bound)
-
 # Tool implementations (using your original functions)
 def post_json(url: str, payload: Dict[str, Any], timeout: int = 30) -> Dict[str, Any]:
     resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=timeout)
@@ -188,7 +200,7 @@ def get_json(url: str, timeout: int = 30) -> Dict[str, Any]:
 def load_sealion_chat(endpoint_name:str,query:str,
                         region_name:str="us-east-1",
                         temperature:float =0.3,
-                        max_tokens:int = 1024*2):
+                        max_tokens:int = 1024*5):
 
     client = SageMakerSealionChat(
 				endpoint_name=endpoint_name,
@@ -197,23 +209,56 @@ def load_sealion_chat(endpoint_name:str,query:str,
 				max_tokens=max_tokens
     )
     prompt = (f"""
-            You are an expert in extracting and summarizing all the medicines stated in the articles given.
-            You will be given one or more articles from webpages. 
-            Focus on fast, effective, and safe first-line treatments that can help manage the illness before considering prescription medicines.
-            Extract and highlight key remedies, lifestyle practices, or natural techniques mentioned in the sources that may provide relief.
-            Do not include unnecessary details—prioritize only practical solutions that directly address the problem. 
+           You are an expert medical information extractor specializing in multilingual medicine identification and traditional remedies from Southeast Asian and global sources.
+            Your task is to extract and summarize ALL medicines, treatments, and remedies mentioned in the provided articles, regardless of language or cultural origin.
+            ## LANGUAGE REQUIREMENTS:
+            - Extract medicine names in their ORIGINAL language (Indonesian, Malay, Thai, Vietnamese, Chinese, etc.)
+            - Provide English translations in parentheses when available
+            - Include destination country terms alongside scientific names 
+            - Preserve spelling variations and regional differences
+            ## EXTRACTION FOCUS:
+            Focus on fast, effective, and safe first-line treatments for: {query}
+            Extract ALL of the following:
+            1. **Traditional Medicines**: Jamu, herbal remedies, TCM, Ayurveda
+            2. **Local Plants/Herbs**: Include local names (e.g., "temulawak (Curcuma zanthorrhiza)", "sambiloto", "mengkudu")
+            3. **Over-the-counter medicines**: Available without prescription
+            4. **Home remedies**: Kitchen ingredients, simple preparations
+            5. **Lifestyle treatments**: Dietary changes, physical practices
+            6. **Natural techniques**: Massage, acupressure, traditional methods
+
+            ## OUTPUT FORMAT:
+            Organize by category with original names preserved:
+
+            **Herbal/Traditional Medicines:**
+            - [Original name] ([English/Scientific name if available]) - [Brief description]
+
+            **Over-the-Counter Medicines:**
+            - [Medicine name] - [Purpose and dosage if mentioned]
+
+            **Home Remedies:**
+            - [Remedy] - [Preparation and use]
+
+            **Lifestyle/Natural Treatments:**
+            - [Method] - [How to apply]
+
+            ## QUALITY GUIDELINES:
+            - Include dosages, preparation methods, and frequency when mentioned
+            - Note any safety warnings or contraindications
+            - Preserve cultural context and traditional usage notes
+            - Include both common and scientific names when available
+            - Don't translate traditional medicine names that don't have direct English equivalents
             
-            Guidelines:  
-            - Focus only on medicines, treatments, or actionable techniques relevant to the illness mentioned
-            - Prioritize medicines that are safe, accessible, and can be implemented quickly.
-            - Include both traditional and non-traditional methods if available.  
-            - Eliminate unnecessary details, filler text, and unrelated information.  
-            - Keep the summary concise but comprehensive, not exceeding 200-300 words.  
-            
-            RESTRICTIONS:
-            - Only summarize/extract informations given by the sources. Do not make up answers.
-            - Do not suggest prescription medicines or antibiotics.
-            Here is the illness to address: {query}
+
+            ## RESTRICTIONS:
+            - Extract ONLY from the provided sources - no additional information
+            - NO prescription medicines or antibiotics
+            - NO medical advice beyond what's stated in sources
+            - Include warnings about consulting healthcare providers when mentioned
+
+            ## SOURCES TO PROCESS:
+            Please extract medicines and treatments for "{query}" from the following articles:
+
+            [Articles will be provided here]
         """)
     
     return client,prompt
@@ -229,9 +274,9 @@ async def scrape_one(
     """POST a single URL to Firecrawl with retries."""
     attempt = 0
     payload = make_payload(url)
-
+    
     async with semaphore:
-        while True:
+        while attempt < max_retries:
             attempt += 1
             try:
                 resp = await client.post(
@@ -240,22 +285,23 @@ async def scrape_one(
                     json=payload,
                     timeout=timeout_s,
                 )
-                # Raise for HTTP errors
                 resp.raise_for_status()
-
-                # Firecrawl usually returns JSON. Guard against non-JSON responses.
+                
                 try:
                     data = resp.json()
                 except json.JSONDecodeError:
                     data = {"raw": resp.text}
-
+                
                 return {
                     "url": url,
                     "status": resp.status_code,
                     "data": data,
+                    "attempts": attempt,
                 }
-
+                
             except (httpx.HTTPError, httpx.ConnectError, httpx.ReadTimeout) as e:
+                print(f"Attempt {attempt}/{max_retries} failed for {url}: {type(e).__name__}: {e}")
+                
                 if attempt >= max_retries:
                     return {
                         "url": url,
@@ -263,32 +309,131 @@ async def scrape_one(
                         "error": f"{type(e).__name__}: {e}",
                         "attempts": attempt,
                     }
-                # Backoff
+                
+                # Exponential backoff
                 delay = base_delay * (2 ** (attempt - 1))
                 await asyncio.sleep(delay)
+            
+            except Exception as e:
+                # Catch any other unexpected exceptions
+                print(f"Unexpected error for {url}: {type(e).__name__}: {e}")
+                return {
+                    "url": url,
+                    "status": "error",
+                    "error": f"Unexpected error: {type(e).__name__}: {e}",
+                    "attempts": attempt,
+                }
+        
+        # This shouldn't be reached, but just in case
+        return {
+            "url": url,
+            "status": "error",
+            "error": "Max retries exceeded without proper error handling",
+            "attempts": attempt,
+        }
 
 async def scrape_all(urls: List[str]) -> List[Dict[str, Any]]:
+    """Scrape all URLs concurrently."""
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-    async with httpx.AsyncClient(http2=True) as client:
-        tasks = [scrape_one(client, u, semaphore) for u in urls]
-        return await asyncio.gather(*tasks)
+    
+    try:
+        async with httpx.AsyncClient(http2=True) as client:
+            tasks = [scrape_one(client, url, semaphore) for url in urls]
+            # Use return_exceptions=True to prevent one failure from stopping everything
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Process results and handle any exceptions
+            normalized = []
+            for url, result in zip(urls, results):
+                if isinstance(result, Exception):
+                    print(f"Unhandled exception for {url}: {type(result).__name__}: {result}")
+                    normalized.append({
+                        "url": url,
+                        "status": "error",
+                        "error": f"Unhandled exception: {type(result).__name__}: {result}",
+                        "attempts": 0,
+                    })
+                else:
+                    normalized.append(result)
+            
+            return normalized
+            
+    except Exception as e:
+        print(f"Critical error in scrape_all: {type(e).__name__}: {e}")
+        # Return error results for all URLs
+        return [{
+            "url": url,
+            "status": "error",
+            "error": f"Critical scraping error: {type(e).__name__}: {e}",
+            "attempts": 0,
+        } for url in urls]
+
+def run_async_scraping_in_thread(urls: List[str]) -> List[Dict[str, Any]]:
+    """Run async scraping in a new thread with its own event loop."""
+    def run_in_thread():
+        try:
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(scrape_all(urls))
+            finally:
+                loop.close()
+        except Exception as e:
+            print(f"Thread execution error: {type(e).__name__}: {e}")
+            return [{
+                "url": url,
+                "status": "error",
+                "error": f"Thread execution error: {type(e).__name__}: {e}",
+                "attempts": 0,
+            } for url in urls]
+    
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(run_in_thread)
+        try:
+            return future.result(timeout=120)  # Increased timeout
+        except concurrent.futures.TimeoutError:
+            print("Scraping operation timed out")
+            return [{
+                "url": url,
+                "status": "error",
+                "error": "Operation timed out",
+                "attempts": 0,
+            } for url in urls]
+        except Exception as e:
+            print(f"Future execution error: {type(e).__name__}: {e}")
+            return [{
+                "url": url,
+                "status": "error",
+                "error": f"Future execution error: {type(e).__name__}: {e}",
+                "attempts": 0,
+            } for url in urls]
 
 def run_async_scraping(urls: List[str]) -> List[Dict[str, Any]]:
-    """Wrapper to run async scraping in sync context"""
+    """Wrapper to run async scraping in sync context."""
+    if not urls:
+        return []
+    
     try:
-        # Try to get existing event loop
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If loop is already running, create a new thread
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, scrape_all(urls))
-                return future.result(timeout=20)  # 1 minute timeout
-        else:
-            return loop.run_until_complete(scrape_all(urls))
-    except RuntimeError:
-        # No event loop exists, create new one
-        return asyncio.run(scrape_all(urls))
+        # Check if we're in an async context
+        try:
+            loop = asyncio.get_running_loop()
+            print("Detected running event loop, using thread execution")
+            return run_async_scraping_in_thread(urls)
+        except RuntimeError:
+            # No running loop, we can create our own
+            print("No running event loop, creating new one")
+            return asyncio.run(scrape_all(urls))
+            
+    except Exception as e:
+        print(f"Critical error in run_async_scraping: {type(e).__name__}: {e}")
+        return [{
+            "url": url,
+            "status": "error",
+            "error": f"Critical wrapper error: {type(e).__name__}: {e}",
+            "attempts": 0,
+        } for url in urls]
+
 
 def make_payload(url: str) -> Dict[str, Any]:
     """Create payload for Firecrawl API"""
@@ -296,22 +441,56 @@ def make_payload(url: str) -> Dict[str, Any]:
         "url": url
     }
 
-def run_async_agenerate(client, messages):
-    """Wrapper to run async agenerate in sync context"""
+def run_async_agenerate(client, prompts):
+    """
+    Wrapper to run async agenerate with multiple prompts in sync context.
+    Each prompt gets combined with system_prompt.
+    """
+    import asyncio
+    import concurrent
+
+    async def _runner():
+        tasks = [
+            client._agenerate([m]) 
+            for m in prompts
+        ]
+        responses = await asyncio.gather(*tasks)
+        return responses
+
     try:
-        # Try to get existing event loop
-        loop = asyncio.get_event_loop()     
+        loop = asyncio.get_event_loop()
         if loop.is_running():
-            # If loop is already running, create a new thread
-            import concurrent.futures
+            # Jupyter or already running event loop
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, client._agenerate(messages))
-                return future.result(timeout=20)  # 1 minute timeout
+                future = executor.submit(lambda: asyncio.run(_runner()))
+                return future.result(timeout=30)
         else:
-            return loop.run_until_complete(client._agenerate(messages))
+            return loop.run_until_complete(_runner())
     except RuntimeError:
-        # No event loop exists, create new one
-        return asyncio.run(client._agenerate(messages))
+        # No loop exists, safe to just run
+        return asyncio.run(_runner())
+
+
+def is_firecrawl_friendly(url: str) -> bool:
+    """
+    Simple filter to keep only web pages Firecrawl v1 can scrape.
+    Exclude PDFs, images, Google Maps, Drive, YouTube, etc.
+    """
+    # block common non-HTML formats
+    blocked_ext = (".pdf", ".jpg", ".jpeg", ".png", ".gif", ".mp4", ".zip")
+    if url.lower().endswith(blocked_ext):
+        return False
+
+    # block Google properties that Firecrawl usually can't extract meaningfully
+    blocked_domains = [
+        "google.com/maps", "google.com/drive",
+        "youtube.com", "facebook.com", "twitter.com",
+        "instagram.com", "tiktok.com"
+    ]
+    if any(b in url.lower() for b in blocked_domains):
+        return False
+
+    return True
 
 async def gs_search_with_crawling(query: str, limit: int = 6, 
                             crawl_top: int = 5,
@@ -320,6 +499,10 @@ async def gs_search_with_crawling(query: str, limit: int = 6,
     """Enhanced Google Search that automatically crawls top results
         provides country code as well to set the searches on specific country.
     """
+    def remove_links(markdown_text):
+        # Remove markdown links but keep text
+        return re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', markdown_text)
+
     max_limit = 5
     
     try:
@@ -329,194 +512,210 @@ async def gs_search_with_crawling(query: str, limit: int = 6,
         results = []
         sec_endpoint = os.getenv("ENDPOINT_NAME2")
 
-            # Load 2nd endpoint config
+        # Load 2nd endpoint config
         client,prompt = load_sealion_chat(sec_endpoint,query)
         messages = [SystemMessage(content=prompt)]
         await emit_progress_message(0,f"Searching {query}...",emit=emit)
         
         # Initialize async client for http requests
         async_client = httpx.AsyncClient()        # Fetch search results
-        for start in range(1, min(max_limit, 11), 5):
-            clean_query = query.split("\"")[0]
-            print("New Query: ",clean_query)
-            url = (
-                "https://www.googleapis.com/customsearch/v1"
-                f"?key={API_KEY}&cx={CX}&q={query}&start={start}&num={max_limit}"
-            ) 
-            # Add Country code if stated
-            if country_code:
-                url += f"&cr={country_code}"
-            
-            res = requests.get(url).json()
-            if "items" in res:
-                for item in res["items"]:
+        clean_query = query.split("\"")[0]
+        print("New Query:", clean_query)
+
+        url = (
+            "https://www.googleapis.com/customsearch/v1"
+            f"?key={API_KEY}&cx={CX}&q={query}&num={max_limit*2}&start=1"
+        ) 
+
+        # Add Country code if stated
+        if country_code:
+            url += f"&cr={country_code}"
+
+        res = requests.get(url).json()
+        if "items" in res:
+            for item in res["items"]:
+                link = item.get('link', '')
+                print(link)
+                if is_firecrawl_friendly(link):
                     results.append({
                         'title': item.get('title', ''),
-                        'link': item.get('link', ''),
+                        'link': link,
                         'snippet': item.get('snippet', '')
                     })
-            else:
-                break
 
-        if not results:
-            return f"No search results found for '{query}'"
+        # Limit to top 5 usable links
+        results = results[:max_limit]
 
+        print("Total url to scrape: ",len(results))
         # Format search results
         formatted_results = f"Search results for '{query}':\n\n"
-        # for i, result in enumerate(results, 1):
-        #     formatted_results += f"{i}. **{result['title']}**\n"
-        #     formatted_results += f"   URL: {result['link']}\n"
-        #     formatted_results += f"   Summary: {result['snippet']}\n\n"
         
         # Extract URLs for scraping (top N results)
         urls_to_scrape = [result['link'] for result in results]
         await emit_progress_message(0,f"Scraping top links: {urls_to_scrape}",emit=emit)
+        print("Total url to scrape: ",urls_to_scrape)
         
         # Scrape the top URLs using async Firecrawl
         formatted_results += f"\n--- DETAILED CONTENT FROM TOP {len(urls_to_scrape)} RESULTS (via Firecrawl) ---\n\n"
         extract_crawl = []
-        try:
-            scrape_results = run_async_scraping(urls_to_scrape)
-            final_messages = []
-            for result in scrape_results:
-                if 'data' in result:
-                    final_messages.extend([SystemMessage(content=prompt), result['data']])
-
-            print("Run simoultaneous generation.")
-            results = run_async_agenerate(client, final_messages)
-            print("Type of results: ",type(results))
-            for gen in results.generations:
-                if gen.message:
-                    print("Content length: ",len(gen.message.content))
-                    print("Content: ",gen.message)
-                    extract_crawl.append(gen.message.content)
-            print("Finish all generation.")            
-            # for i, result in enumerate(scrape_results, 1):
-            #     print("Run")
-            #     formatted_results += f"=== CONTENT {i}: {result.get('url', 'Unknown URL')} ===\n"
-            #     # Extract content from Firecrawl response
-            #     data = result.get('data', {})
-            #     if isinstance(data, dict):
-            #         content = data.get('content', data.get('markdown', data.get('text', str(data))))
-            #     else:
-            #         content = str(data)
-                
-            #     print("Sending Content: ",len(content))
-            #     key_info = client._generate(messages + [f"\n\n{content[:4000]}"])
-            #     if key_info.generations[0].message:
-            #         extract_crawl.append(key_info.generations[0].message.content)
-            #     print("Finish Extraction")
-                
-                # Extract key information
-                # if content and len(content) > 50:
-                #     key_info = extract_crawl_first_item_tool(content)
-                #     formatted_results += f"{key_info}\n\n"
-                # else:
-                #     formatted_results += "No meaningful content extracted.\n\n"
-            
-        except Exception as scrape_error:
-            formatted_results += f"Error during scraping: {str(scrape_error)}\n"
-            logger.error(f"Scraping error: {scrape_error}")
         
+        print("Starting scraping process...")
+        
+        # This will NEVER raise an exception now
+        scrape_results = run_async_scraping(urls_to_scrape)
+        
+        print("Still perform docs text")  # This will now always execute
+        print(f"Scraping completed. Processing {len(scrape_results)} results...")
+        
+        final_messages = []
+        docs_text = ""
+        successful_scrapes = 0
+        
+        # Process scrape results more robustly
+        for i, result in enumerate(scrape_results):
+            print(f"Processing result {i+1}/{len(scrape_results)}: {result['url']}")
+            
+            if result.get('status') == 'error':
+                print(f"  Error: {result.get('error', 'Unknown error')}")
+                continue
+            
+            # Check for successful data extraction
+            try:
+                if "data" in result and result["data"] and "data" in result["data"]:
+                    markdown_content = result["data"]["data"].get("markdown", "")
+                    if markdown_content:
+                        # Clean and truncate content
+                        clean_content = remove_links(markdown_content)[:3000]
+                        docs_text += f"\n\n--- Content from {result['url']} ---\n"
+                        docs_text += clean_content
+                        successful_scrapes += 1
+                        print(f"  Successfully extracted {len(clean_content)} characters")
+                    else:
+                        print("  No markdown content found")
+                else:
+                    print(f"  Unexpected data structure: {result.keys()}")
+                    
+            except Exception as e:
+                print(f"  Error processing result data: {type(e).__name__}: {e}")
+                continue
+        
+        print(f"Successfully processed {successful_scrapes} out of {len(scrape_results)} results")
+        
+        # Only proceed with summarization if we have content
+        if docs_text.strip():
+            print(f"Preparing to summarize {len(docs_text)} characters of content...")
+            
+            try:
+                final_messages = [
+                    SystemMessage(content=prompt),
+                    HumanMessage(content=f"Summarize the following content:\n\n{docs_text}")
+                ]
+                
+                print("Running simultaneous generation...")
+                endpoint_name = os.getenv("ENDPOINT_NAME","Unknown")
+                client = SageMakerSealionChat(
+                            endpoint_name=endpoint_name,
+                            region_name="us-east-1",
+                            temperature=0.1,
+                            max_tokens=1024
+                        )
+                
+                # Generate summaries
+                results = await asyncio.gather(*(client._agenerate([m]) for m in final_messages))
+                # print(f"Total LLM results: {len(results)}")
+                # print("Results:", results)
+                for gen in results:
+
+                    if gen.generations and 'ready to process the articles' not in gen.generations[0].message.content:
+                        content = gen.generations[0].message.content.strip()
+                        print(f"Generated content length: {len(content)}")
+                        print(f"Content preview: {content[:200]}...")
+                        extract_crawl.append(content)
+                
+                print("Finished all generation.")
+                
+            except Exception as llm_error:
+                print(f"LLM generation error: {type(llm_error).__name__}: {llm_error}")
+                extract_crawl.append(f"Error during content summarization: {llm_error}")
+        else:
+            print("No content available for summarization")
+            extract_crawl.append("No content could be extracted from the scraped URLs")
+            
+        print("\n" + "-"*100)
         return extract_crawl
         
     except Exception as e:
-        logger.error(f"Search and crawl failed: {e}")
-        return f"Search and crawl failed: {str(e)}"
-        
-    #     extract_crawl = []
-    #     for i, (url, content) in enumerate(crawl_results.items(), 1):
-    #         # Extract only max_limit
-    #         if len(extract_crawl) > max_limit:
-    #             break
-    #         # formatted_results += f"=== CONTENT {i}: {url} ===\n"
-    #         # Extract key information from crawled content
-    #         key_info = client._generate(messages + [f"\n\n{content}"])
-    #         if key_info.generations[0].message:
-    #             extract_crawl.append(key_info.generations[0].message.content)
-        
-    #     return "\n\n".join(extract_crawl)
-    # except Exception as e:
-    #     return f"Search and crawl failed: {str(e)}"
+        error_msg = f"Search and crawl failed: {type(e).__name__}: {e}"
+        logger.error(error_msg)
+        print(f"Critical error in gs_search_with_crawling: {error_msg}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return [error_msg]
 
+async def crawl_url_with_polling_tool(
+    target_url: str,
+    crawl_base_url: str = None,
+    max_wait_time_seconds: int = 120,
+    poll_interval_seconds: int = 10
+) -> str:
+    """Async crawl URL and return formatted content"""
+    base = crawl_base_url or os.getenv(
+        "CRAWLER_BASE_URL",
+        "http://ec2-47-129-166-168.ap-southeast-1.compute.amazonaws.com:3002"
+    )
+    base += "/v1/crawl"
 
-def crawl_multiple_urls(urls: List[str], max_workers: int = 3) -> Dict[str, str]:
-    """Crawl multiple URLs concurrently and return results"""
-    results = {}
-    
-    def crawl_single_url(url: str) -> tuple[str, str]:
-        """Helper function to crawl a single URL"""
+    async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            content = crawl_url_with_polling_tool(url)
-            return url, content
+            # Step 1: initiate crawl
+            init = (await client.post(base, json={"url": target_url})).json()
+            if not init.get("success"):
+                return f"Crawl initiation failed: {init}"
+
+            status_url = init.get("url")
+            if not status_url:
+                return f"Missing status URL in initiation response: {init}"
+
+            # Step 2: poll for results
+            start = time.time()
+            while time.time() - start < max_wait_time_seconds:
+                try:
+                    result = (await client.get(status_url)).json()
+                except httpx.RequestError:
+                    await asyncio.sleep(poll_interval_seconds)
+                    continue
+
+                status = result.get("status", "unknown")
+                completed = int(result.get("completed", 0) or 0)
+                total = int(result.get("total", 0) or 0)
+                data = result.get("data", [])
+
+                if status == "completed" or (
+                    total > 0 and completed >= total and isinstance(data, list) and len(data) > 0
+                ):
+                    if data:
+                        first_item = data[0]
+                        content = first_item.get("markdown", "No content available")
+                        return f"Content from {target_url}:\n\n{content[:7000]}"
+                    return f"Crawl completed but no content found for {target_url}"
+
+                await asyncio.sleep(poll_interval_seconds)
+
+            return f"Crawling did not complete within {max_wait_time_seconds} seconds"
+
         except Exception as e:
-            return url, f"Error crawling {url}: {str(e)}"
-    
-    # Use ThreadPoolExecutor for concurrent crawling
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all crawl tasks
-        future_to_url = {executor.submit(crawl_single_url, url): url for url in urls}
-        
-        # Collect results as they complete
-        for future in as_completed(future_to_url, timeout=180):  # 3 minutes total timeout
-            url = future_to_url[future]
-            try:
-                url_result, content = future.result()
-                results[url_result] = content
-                logger.info(f"Successfully crawled: {url} with {content[:200]}")
-            except Exception as e:
-                results[url] = f"Error: {str(e)}"
-                logger.error(f"Failed to crawl {url}: {str(e)}")
-    
+            return f"Crawling failed for {target_url}: {str(e)}"
+
+async def crawl_multiple_urls(urls: list[str], max_concurrent: int = 3) -> dict[str, str]:
+    """Crawl multiple URLs concurrently and return results"""
+    semaphore = asyncio.Semaphore(max_concurrent)
+    results = {}
+
+    async def sem_crawl(url: str):
+        async with semaphore:
+            content = await crawl_url_with_polling_tool(url)
+            results[url] = content
+    await asyncio.gather(*(sem_crawl(url) for url in urls))
     return results
-
-def crawl_url_with_polling_tool(
-                                    target_url: str,
-                                    crawl_base_url: Optional[str] = None,
-                                    max_wait_time_seconds: int = 120,
-                                    poll_interval_seconds: int = 10
-                                ) -> str:
-    """Crawl URL and return formatted content"""
-    try:
-        base = crawl_base_url or os.getenv("CRAWLER_BASE_URL", "http://ec2-47-129-166-168.ap-southeast-1.compute.amazonaws.com:3002/v1/crawl")
-        
-        # Step 1: initiate crawl
-        init = post_json(base, {"url": target_url})
-        if not init.get("success"):
-            return f"Crawl initiation failed: {init}"
-        
-        status_url = init.get("url")
-        if not status_url:
-            return f"Missing status URL in initiation response: {init}"
-        
-        # Step 2: poll for results
-        start = time.time()
-        while time.time() - start < max_wait_time_seconds:
-            try:
-                result = get_json(status_url)
-            except requests.RequestException:
-                time.sleep(poll_interval_seconds)
-                continue
-            
-            status = result.get("status", "unknown")
-            completed = int(result.get("completed", 0) or 0)
-            total = int(result.get("total", 0) or 0)
-            data = result.get("data", [])
-            
-            if status == "completed" or (total > 0 and completed >= total and isinstance(data, list) and len(data) > 0):
-                # Extract and format the first item
-                if data and len(data) > 0:
-                    first_item = data[0]
-                    content = first_item.get('markdown', 'No content available')
-                    return f"Content from {target_url}:\n\n{content[:7000]}"  # Limit content length
-                return f"Crawl completed but no content found for {target_url}"
-            
-            time.sleep(poll_interval_seconds)
-        
-        return f"Crawling did not complete within {max_wait_time_seconds} seconds"
-    except Exception as e:
-        return f"Crawling failed: {str(e)}"
-
 
 def gs_search(query: str, limit: int = 11) -> str:
     """Search Google Custom Search and return formatted results,
